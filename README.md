@@ -1,12 +1,38 @@
-# Funda
+# pyfunda
+
+[![PyPI version](https://img.shields.io/pypi/v/pyfunda)](https://pypi.org/project/pyfunda/)
+[![Downloads](https://img.shields.io/pypi/dm/pyfunda)](https://pypi.org/project/pyfunda/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pyfunda)](https://pypi.org/project/pyfunda/)
+[![License](https://img.shields.io/pypi/l/pyfunda)](https://github.com/0xMH/pyfunda/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/0xMH/pyfunda?style=social)](https://github.com/0xMH/pyfunda/stargazers)
 
 Python API for [Funda.nl](https://www.funda.nl) real estate listings.
+
+> If you find this useful, consider giving it a star — it helps others discover the project.
 
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install pyfunda
 ```
+
+## Why pyfunda?
+
+**Funda has no public API.** If you want Dutch real estate data programmatically, your options are limited:
+
+| Library | Approach | Limitations |
+|---------|----------|-------------|
+| [whchien/funda-scraper](https://github.com/whchien/funda-scraper) | HTML scraping | Listing dates blocked since Q4 2023 (requires login). Breaks when Funda changes frontend. |
+| [khpeek/funda-scraper](https://github.com/khpeek/funda-scraper) | Scrapy | Last updated 2016. No longer maintained. |
+| [joostboon/Funda-Scraper](https://github.com/joostboon/Funda-Scraper) | Selenium | Requires manual CAPTCHA solving. Slow browser automation. |
+| **Official API** | — | Only available to registered brokers. Not accessible to developers. |
+
+**pyfunda takes a different approach:** it uses Funda's internal mobile app API, reverse-engineered from the official Android app.
+
+- Pure Python, no browser or Selenium needed
+- No CAPTCHAs or anti-bot blocks
+- 70+ fields including photos, floorplans, coordinates, and listing dates
+- Stable mobile API that doesn't break when the website changes
 
 ## Quick Start
 
@@ -191,6 +217,29 @@ results = f.search_listing(
 ```python
 results = f.search_listing(['amsterdam', 'rotterdam', 'utrecht'])
 ```
+
+#### get_latest_id()
+
+Get the highest listing ID currently in Funda's search index.
+
+```python
+latest = f.get_latest_id()  # e.g., 7852306
+```
+
+#### poll_new_listings(since_id, ...)
+
+Generator that polls for new listings by incrementing IDs.
+
+```python
+for listing in f.poll_new_listings(
+    since_id=7852306,           # Start from this ID + 1
+    max_consecutive_404s=20,    # Stop after N consecutive 404s
+    offering_type='buy',        # Filter: 'buy' or 'rent' (optional)
+):
+    print(listing['title'])
+```
+
+This bypasses ES search and queries the detail API directly, catching listings that haven't been indexed yet.
 
 ### Listing
 
@@ -418,6 +467,30 @@ results = f.search_listing(
 for r in results:
     print(f"{r['title']} - €{r['price']:,}")
 ```
+
+### Poll for new listings (bypass ES lag)
+
+Funda's search index can lag behind the actual database by hours. Use `poll_new_listings` to find listings that search doesn't show yet:
+
+```python
+from funda import Funda
+
+f = Funda()
+
+# Get starting point from search (one-time)
+latest_id = f.get_latest_id()  # e.g., 7852306
+
+# Poll for new listings by incrementing IDs
+for listing in f.poll_new_listings(since_id=latest_id):
+    print(f"New: {listing['title']}, {listing['city']}")
+    print(f"     {listing['url']}")
+
+# Filter by type
+for listing in f.poll_new_listings(since_id=latest_id, offering_type="buy"):
+    print(f"New sale: {listing['title']}")
+```
+
+The generator stops after 20 consecutive 404s (configurable via `max_consecutive_404s`).
 
 ## License
 

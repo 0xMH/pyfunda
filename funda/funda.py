@@ -411,6 +411,74 @@ class Funda:
             data=listing_data
         )
 
+    def get_latest_id(self) -> int:
+        """Get the latest listing ID from ES search.
+
+        Useful as a starting point for poll_new_listings if you don't
+        have a saved ID.
+
+        Returns:
+            The highest global_id currently in the search index.
+        """
+        results = self.search_listing(offering_type="buy", sort="newest", page=0)
+        if not results:
+            raise RuntimeError("Could not fetch latest listings from search")
+        return max(int(r["global_id"]) for r in results)
+
+    def poll_new_listings(
+        self,
+        since_id: int,
+        max_consecutive_404s: int = 20,
+        offering_type: str | None = None,
+    ):
+        """Poll for new listings by incrementing IDs.
+
+        Generator that yields listings by directly querying the detail API,
+        bypassing ES search. This catches listings that ES hasn't indexed yet.
+
+        Args:
+            since_id: Start polling from this ID + 1.
+            max_consecutive_404s: Stop after this many consecutive 404s (default 20).
+            offering_type: Filter by "buy" or "rent" (default: return all).
+
+        Yields:
+            Listing objects as they are found.
+
+        Example:
+            >>> f = Funda()
+            >>> for listing in f.poll_new_listings(since_id=7852306):
+            ...     print(listing['title'], listing['city'])
+            ...     save_to_db(listing)  # process immediately
+        """
+        consecutive_404s = 0
+        current_id = since_id + 1
+
+        while consecutive_404s < max_consecutive_404s:
+            url = API_LISTING.format(listing_id=current_id)
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+
+                if response.status_code == 200:
+                    consecutive_404s = 0
+                    data = response.json()
+
+                    # Filter by offering type if specified
+                    if offering_type:
+                        listing_offering = data.get("OfferingType", "")
+                        expected = "Sale" if offering_type == "buy" else "Rental"
+                        if listing_offering != expected:
+                            current_id += 1
+                            continue
+
+                    yield self._parse_listing(data)
+                else:
+                    consecutive_404s += 1
+
+            except requests.RequestException:
+                consecutive_404s += 1
+
+            current_id += 1
+
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""
         listings = []
