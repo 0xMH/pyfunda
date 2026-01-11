@@ -4,7 +4,7 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/pyfunda)](https://pypi.org/project/pyfunda/)
 [![License](https://img.shields.io/pypi/l/pyfunda)](https://github.com/0xMH/pyfunda/blob/main/LICENSE)
 
-Python API for [Funda.nl](https://www.funda.nl) real estate listings.
+The only working real Python API for Funda ([funda.nl](https://www.funda.nl)) — the Netherlands' largest real estate platform.
 
 > If you find this useful, consider giving it a star — it helps others discover the project.
 
