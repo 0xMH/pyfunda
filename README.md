@@ -1,14 +1,20 @@
 # pyfunda
 
 [![PyPI version](https://img.shields.io/pypi/v/pyfunda)](https://pypi.org/project/pyfunda/)
-[![Downloads](https://img.shields.io/pypi/dm/pyfunda)](https://pypi.org/project/pyfunda/)
 [![Python versions](https://img.shields.io/pypi/pyversions/pyfunda)](https://pypi.org/project/pyfunda/)
 [![License](https://img.shields.io/pypi/l/pyfunda)](https://github.com/0xMH/pyfunda/blob/main/LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/0xMH/pyfunda?style=social)](https://github.com/0xMH/pyfunda/stargazers)
 
 Python API for [Funda.nl](https://www.funda.nl) real estate listings.
 
 > If you find this useful, consider giving it a star — it helps others discover the project.
+
+<a href="https://star-history.com/#0xMH/pyfunda&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date" />
+ </picture>
+</a>
 
 ## Installation
 
@@ -18,7 +24,9 @@ pip install pyfunda
 
 ## Why pyfunda?
 
-**Funda has no public API.** If you want Dutch real estate data programmatically, your options are limited:
+**Because it simply works.**
+
+Funda has no public API. If you want Dutch real estate data programmatically, your options are limited:
 
 | Library | Approach | Limitations |
 |---------|----------|-------------|
