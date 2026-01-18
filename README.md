@@ -8,9 +8,7 @@ The only working real Python API for Funda ([funda.nl](https://www.funda.nl)) â€
 
 > If you find this useful, consider giving it a star â€” it helps others discover the project.
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=0xMH/pyfunda&type=date&legend=top-left)](https://www.star-history.com/#0xMH/pyfunda&type=date&legend=top-left)
+[![Star History Chart](https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date)](https://star-history.com/#0xMH/pyfunda&Date)
 
 ## Installation
 
