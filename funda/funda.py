@@ -1,9 +1,10 @@
 """Main Funda API class."""
 
 import re
+import time
 from typing import Any
 
-import requests
+from curl_cffi import requests
 
 from funda.listing import Listing
 
@@ -23,7 +24,8 @@ HEADERS = {
 
 SEARCH_HEADERS = {
     "user-agent": "Dart/3.9 (dart:io)",
-    "content-type": "application/x-ndjson",
+    "content-type": "application/json",
+    "accept": "application/json",
     "referer": "https://www.funda.nl/",
 }
 
@@ -68,7 +70,7 @@ class Funda:
     def session(self) -> requests.Session:
         """Lazily create HTTP session."""
         if self._session is None:
-            self._session = requests.Session()
+            self._session = requests.Session(impersonate="chrome")
             self._session.headers.update(HEADERS)
         return self._session
 
@@ -257,14 +259,19 @@ class Funda:
         query_line = json.dumps({"id": "search_result_20250805", "params": params})
         query = f"{index_line}\n{query_line}\n"
 
-        response = requests.post(
-            API_SEARCH,
-            headers=SEARCH_HEADERS,
-            data=query,
-            timeout=self.timeout,
-        )
-
-        if response.status_code != 200:
+        # Retry on intermittent 400 errors from API
+        for attempt in range(3):
+            response = self.session.post(
+                API_SEARCH,
+                headers=SEARCH_HEADERS,
+                data=query,
+                timeout=self.timeout,
+            )
+            if response.status_code == 200:
+                break
+            if response.status_code == 400 and attempt < 2:
+                time.sleep(0.1 * (attempt + 1))
+                continue
             raise RuntimeError(f"Search failed (status {response.status_code})")
 
         data = response.json()
