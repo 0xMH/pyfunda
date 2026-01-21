@@ -53,16 +53,15 @@ def main():
         for change in history:
             date = change.get("date", "Unknown")
             price = change.get("human_price", "N/A")
-            status = change.get("status", "Unknown")
-            source = change.get("source", "")
+            status = change.get("status", "unknown")
 
-            # Add context for different types
-            if status == "WOZ":
-                type_str = "WOZ (tax assessment)"
-            elif status == "Verkocht":
-                type_str = "Sold"
-            else:
-                type_str = f"{status} ({source})"
+            # Format status for display
+            status_labels = {
+                "asking_price": "Asking price",
+                "sold": "Sold",
+                "woz": "WOZ (tax assessment)",
+            }
+            type_str = status_labels.get(status, status)
 
             print(f"{date:<18} {price:<14} {type_str}")
 

@@ -491,9 +491,9 @@ class Funda:
         """Get historical price data for a listing.
 
         Fetches price history from Walter Living API, including:
-        - Previous asking prices (Vraagprijs)
+        - Previous asking prices
         - WOZ tax assessments
-        - Previous sales (Verkocht)
+        - Previous sales
 
         Args:
             listing: A Listing object or Funda URL string
@@ -505,16 +505,16 @@ class Funda:
             - date: Human readable date
             - timestamp: ISO timestamp
             - source: "Funda" or "WOZ"
-            - status: "Vraagprijs", "Verkocht", or "WOZ"
+            - status: "asking_price", "sold", or "woz"
 
         Example:
             >>> listing = f.get_listing(89666837)
             >>> history = f.get_price_history(listing)
             >>> for change in history:
             ...     print(change['date'], change['human_price'], change['status'])
-            15 jan, 2026 €400.000 Vraagprijs
-            1 jan, 2025 €376.000 WOZ
-            8 mrt, 2023 €325.000 Vraagprijs
+            15 jan, 2026 €400.000 asking_price
+            1 jan, 2025 €376.000 woz
+            8 mrt, 2023 €325.000 asking_price
         """
         # Extract data from Listing or fetch if URL provided
         if isinstance(listing, str):
@@ -547,7 +547,19 @@ class Funda:
         if data.get("status") != "ok":
             raise LookupError("Price history not available for this listing")
 
-        return data.get("changes", [])
+        # Translate Dutch status to English
+        status_map = {
+            "Vraagprijs": "asking_price",
+            "Verkocht": "sold",
+            "WOZ": "woz",
+        }
+
+        changes = data.get("changes", [])
+        for change in changes:
+            if "status" in change:
+                change["status"] = status_map.get(change["status"], change["status"])
+
+        return changes
 
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""
