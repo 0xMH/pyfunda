@@ -14,6 +14,7 @@ API_BASE = "https://listing-detail-page.funda.io/api/v4/listing/object/nl"
 API_LISTING = f"{API_BASE}/{{listing_id}}"
 API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
 API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
+API_WALTER = "https://api.walterliving.com/hunter/lookup"
 
 # Headers for mobile API
 HEADERS = {
@@ -70,7 +71,7 @@ class Funda:
     def session(self) -> requests.Session:
         """Lazily create HTTP session."""
         if self._session is None:
-            self._session = requests.Session(impersonate="chrome")
+            self._session = requests.Session(impersonate="safari")
             self._session.headers.update(HEADERS)
         return self._session
 
@@ -485,6 +486,68 @@ class Funda:
                 consecutive_404s += 1
 
             current_id += 1
+
+    def get_price_history(self, listing: Listing | str) -> list[dict]:
+        """Get historical price data for a listing.
+
+        Fetches price history from Walter Living API, including:
+        - Previous asking prices (Vraagprijs)
+        - WOZ tax assessments
+        - Previous sales (Verkocht)
+
+        Args:
+            listing: A Listing object or Funda URL string
+
+        Returns:
+            List of price changes, each containing:
+            - price: Numeric price
+            - human_price: Formatted price (e.g., "€400.000")
+            - date: Human readable date
+            - timestamp: ISO timestamp
+            - source: "Funda" or "WOZ"
+            - status: "Vraagprijs", "Verkocht", or "WOZ"
+
+        Example:
+            >>> listing = f.get_listing(89666837)
+            >>> history = f.get_price_history(listing)
+            >>> for change in history:
+            ...     print(change['date'], change['human_price'], change['status'])
+            15 jan, 2026 €400.000 Vraagprijs
+            1 jan, 2025 €376.000 WOZ
+            8 mrt, 2023 €325.000 Vraagprijs
+        """
+        # Extract data from Listing or fetch if URL provided
+        if isinstance(listing, str):
+            listing = self.get_listing(listing)
+
+        url = listing.get("url")
+        address = listing.get("title")
+        postcode = listing.get("postcode")
+
+        if not all([url, address, postcode]):
+            raise ValueError("Listing must have url, title (address), and postcode")
+
+        payload = {
+            "url": url,
+            "address": address,
+            "zipcode": postcode,
+        }
+
+        response = self.session.post(
+            API_WALTER,
+            json=payload,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=self.timeout,
+        )
+
+        if response.status_code != 200:
+            raise LookupError(f"Could not fetch price history (status {response.status_code})")
+
+        data = response.json()
+        if data.get("status") != "ok":
+            raise LookupError("Price history not available for this listing")
+
+        return data.get("changes", [])
 
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""
