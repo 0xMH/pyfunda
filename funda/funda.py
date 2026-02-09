@@ -315,6 +315,7 @@ class Funda:
         self,
         location: str | list[str] | None = None,
         offering_type: str = "buy",
+        availability: str | list[str] | None = None,
         price_min: int | None = None,
         price_max: int | None = None,
         area_min: int | None = None,
@@ -332,6 +333,8 @@ class Funda:
         Args:
             location: City/area name(s) or postcode to search in
             offering_type: "buy" or "rent"
+            availability: Filter by status - "available", "negotiations", "sold",
+                or a list combining them. Default: ["available", "negotiations"]
             price_min: Minimum price
             price_max: Maximum price
             area_min: Minimum living area in m²
@@ -350,6 +353,7 @@ class Funda:
 
         Example:
             >>> f.search_listing('amsterdam', price_max=500000)
+            >>> f.search_listing('amsterdam', availability='sold')  # sold listings
             >>> f.search_listing('1012AB', radius_km=30, price_max=1250000, energy_label=['A', 'A+'])
         """
         import json
@@ -359,9 +363,19 @@ class Funda:
         if location:
             locations = [location] if isinstance(location, str) else list(location)
 
+        # Normalize availability - map user-friendly "sold" to API's "unavailable"
+        if availability is None:
+            avail_list = ["available", "negotiations"]
+        elif isinstance(availability, str):
+            avail_list = [availability]
+        else:
+            avail_list = list(availability)
+        # Map "sold" to "unavailable" (API terminology)
+        avail_list = ["unavailable" if v == "sold" else v for v in avail_list]
+
         # Build search params
         params: dict[str, Any] = {
-            "availability": ["available", "negotiations"],
+            "availability": avail_list,
             "type": ["single"],
             "zoning": ["residential"],
             "object_type": object_type or ["house", "apartment"],
