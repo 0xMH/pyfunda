@@ -16,6 +16,7 @@ API_BASE = "https://listing-detail-page.funda.io/api/v4/listing/object/nl"
 API_LISTING = f"{API_BASE}/{{listing_id}}"
 API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
 API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
+API_CONTACTS = "https://contacts-flows-bff.funda.io/api/v1/contacts-flows/listings/{listing_id}/contact-block"
 API_WALTER = "https://api.walterliving.com/hunter/lookup"
 
 # Funda mobile app JA3 fingerprints (captured from real Dart/Flutter app traffic)
@@ -791,6 +792,108 @@ class Funda:
                 change["status"] = status_map.get(change["status"], change["status"])
 
         return changes
+
+    def get_contact_info(self, listing: "Listing | int | str") -> dict:
+        """Get realtor/makelaar contact info for a listing.
+
+        Returns the agency name, phone number, and association code as exposed
+        by the Funda Android app's contact block endpoint.
+
+        Args:
+            listing: A Listing object, a numeric id (globalId or tinyId), or a
+                Funda URL. tinyIds and URLs are resolved to a globalId via
+                ``get_listing`` before the contact lookup.
+
+        Returns:
+            Dict with the primary broker hoisted to the top level for
+            ergonomics (``name``, ``phone``, ``broker_id``, ``association``)
+            plus listing meta (``listing_id``, ``tiny_id``, ``listing_status``)
+            and the full ``brokers`` list for the rare multi-agency case.
+
+        Raises:
+            LookupError: Listing exists but has no contact info (HTTP 204) or
+                the endpoint returned a non-200 status.
+
+        Example:
+            >>> listing = f.get_listing(43333315)
+            >>> contact = f.get_contact_info(listing)
+            >>> contact['name'], contact['phone']
+            ('Scheffer Makelaardij B.V.', '020-2470322')
+        """
+        # Resolve to global_id (the endpoint expects the numeric listingId,
+        # not the tinyId shown in funda.nl URLs).
+        global_id: int | None = None
+        if isinstance(listing, Listing):
+            global_id = listing.get("global_id")
+        elif isinstance(listing, str) and "funda.nl" in listing:
+            global_id = self.get_listing(listing).get("global_id")
+        else:
+            id_str = str(listing)
+            if not id_str.isdigit():
+                raise ValueError(f"Unrecognized listing identifier: {listing!r}")
+            # tinyIds are 8-9 digits; resolve them to a globalId via the
+            # listing detail endpoint. 7-digit ids are already globalIds.
+            if len(id_str) >= 8:
+                global_id = self.get_listing(int(id_str)).get("global_id")
+            else:
+                global_id = int(id_str)
+
+        if not global_id:
+            raise ValueError("Could not determine listing globalId")
+
+        url = API_CONTACTS.format(listing_id=global_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(f"Listing {global_id} has no contact info")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch contact info (status {response.status_code})"
+            )
+
+        return self._parse_contact_info(response.json())
+
+    def _parse_contact_info(self, data: dict) -> dict:
+        """Normalize the contact-block payload into a flat dict."""
+        brokers = [
+            {
+                "broker_id": b.get("id"),
+                "name": b.get("displayName"),
+                "phone": b.get("phoneNumber"),
+                "association": b.get("associationCode"),
+                "logo_url": b.get("logoUrl") or None,
+                "banner_url": b.get("bannerUrl"),
+                "is_contacting_enabled": b.get("isContactingEnabled"),
+                "personal_contact_info": b.get("personalContactBlockInfo"),
+            }
+            for b in data.get("contactBlockDetails", [])
+        ]
+
+        result: dict[str, Any] = {
+            "listing_id": data.get("id"),
+            "tiny_id": data.get("tinyId"),
+            "listing_status": data.get("listingStatus"),
+            "is_viewing_planner_enabled": data.get("isViewingPlannerEnabled"),
+            "brokers": brokers,
+        }
+
+        # Hoist primary broker fields to the top level (single-agency is the
+        # overwhelming common case).
+        if brokers:
+            primary = brokers[0]
+            result.update({
+                "broker_id": primary["broker_id"],
+                "name": primary["name"],
+                "phone": primary["phone"],
+                "association": primary["association"],
+                "logo_url": primary["logo_url"],
+                "banner_url": primary["banner_url"],
+                "is_contacting_enabled": primary["is_contacting_enabled"],
+                "personal_contact_info": primary["personal_contact_info"],
+            })
+
+        return result
 
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""

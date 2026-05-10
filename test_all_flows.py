@@ -758,6 +758,60 @@ def test_listing_setitem():
 
 
 # =============================================================================
+# FLOW 18: Realtor Contact Info
+# =============================================================================
+
+@test("Get contact info by globalId")
+def test_get_contact_info_by_global_id():
+    from funda import Funda
+    f = Funda()
+    contact = f.get_contact_info(7988952)
+
+    assert contact['name'], "Should have agency name"
+    assert contact['phone'], "Should have phone number"
+    assert contact['broker_id'], "Should have broker_id"
+    assert contact['listing_id'] == '7988952', "Should echo listing_id"
+    assert contact['tiny_id'] == '43333315', "Should include tiny_id"
+    assert isinstance(contact['brokers'], list) and contact['brokers'], "Should have brokers list"
+    print(f"  {contact['name']} | {contact['phone']}")
+
+
+@test("Get contact info by Listing object")
+def test_get_contact_info_by_listing():
+    from funda import Funda
+    f = Funda()
+    listing = f.get_listing(43333315)
+    contact = f.get_contact_info(listing)
+
+    assert contact['phone'], "Should have phone number"
+    assert contact['name'], "Should have agency name"
+    print(f"  {contact['name']} | {contact['phone']}")
+
+
+@test("Get contact info by tinyId resolves to globalId")
+def test_get_contact_info_by_tiny_id():
+    from funda import Funda
+    f = Funda()
+    contact = f.get_contact_info(43333315)
+
+    assert contact['listing_id'] == '7988952', "tinyId should resolve to globalId"
+    assert contact['phone'], "Should have phone number"
+
+
+@test("Get contact info raises LookupError for unknown listing")
+def test_get_contact_info_not_found():
+    from funda import Funda
+    f = Funda()
+
+    try:
+        f.get_contact_info(1)
+        assert False, "Should have raised LookupError"
+    except LookupError as e:
+        assert "no contact info" in str(e).lower() or "could not fetch" in str(e).lower()
+        print(f"  Correctly raised: {e}")
+
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 
@@ -849,6 +903,12 @@ def run_all_tests():
 
         # Flow 17: Listing Set Item
         test_listing_setitem,
+
+        # Flow 18: Realtor Contact Info
+        test_get_contact_info_by_global_id,
+        test_get_contact_info_by_listing,
+        test_get_contact_info_by_tiny_id,
+        test_get_contact_info_not_found,
     ]
 
     start_time = time.time()

@@ -283,6 +283,32 @@ for change in history:
 
 > **Note:** This fetches data from the Walter Living API. Only called when explicitly requested (lazy-loaded).
 
+#### get_contact_info(listing)
+
+Get the realtor/makelaar agency name and phone number for a listing. Accepts a `Listing`, a numeric id (globalId or tinyId), or a Funda URL.
+
+```python
+listing = f.get_listing(43333315)
+contact = f.get_contact_info(listing)
+
+print(contact['name'], contact['phone'])
+# Scheffer Makelaardij B.V. 020-2470322
+```
+
+**Returns:** A dict with the primary broker hoisted to the top level:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Agency display name |
+| `phone` | Agency phone number |
+| `broker_id` | Numeric office id |
+| `association` | Trade association code (e.g. `VN`) |
+| `is_contacting_enabled` | Whether the in-app contact form is enabled |
+| `listing_id` / `tiny_id` / `listing_status` | Listing meta |
+| `brokers` | Full list of brokers (for the rare multi-agency case) |
+
+Raises `LookupError` if the listing has no contact info exposed.
+
 ### Listing
 
 Listing objects support dict-like access with convenient aliases.
