@@ -823,12 +823,20 @@ class Funda:
             agents = source.get("agent", [])
             agent = agents[0] if agents else {}
 
+            street = address.get("street_name") or ""
+            number = address.get("house_number") or ""
+            suffix = address.get("house_number_suffix") or ""
+            title = f"{street} {number}".strip()
+            if suffix:
+                title = f"{title}-{suffix}" if number else f"{title} {suffix}".strip()
+
             listing_data = {
                 "global_id": int(hit.get("_id", 0)),
-                "title": f"{address.get('street_name', '')} {address.get('house_number', '')}".strip(),
+                "title": title,
                 "street_name": address.get("street_name"),
                 "house_number": address.get("house_number"),
                 "house_number_suffix": address.get("house_number_suffix"),
+                "house_number_ext": address.get("house_number_suffix"),
                 "city": address.get("city"),
                 "postcode": address.get("postal_code"),
                 "province": address.get("province"),
