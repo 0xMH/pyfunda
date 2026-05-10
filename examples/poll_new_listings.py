@@ -1,61 +1,54 @@
-"""Poll for new listings by incrementing IDs.
-
-This bypasses Funda's ES search index which can lag behind by hours.
-"""
+#!/usr/bin/env python3
+"""Poll for new listings by incrementing IDs."""
 
 import json
 from pathlib import Path
 
-from funda import Funda
+from funda import Funda, Listing
 
 
 STATE_FILE = Path("last_seen_id.json")
 
 
 def load_last_id() -> int | None:
-    """Load the last seen ID from state file."""
     if STATE_FILE.exists():
         return json.loads(STATE_FILE.read_text()).get("last_id")
     return None
 
 
 def save_last_id(last_id: int) -> None:
-    """Save the last seen ID to state file."""
-    STATE_FILE.write_text(json.dumps({"last_id": last_id}))
+    STATE_FILE.write_text(json.dumps({"last_id": last_id}, indent=2))
 
 
-def main():
-    f = Funda()
+def listing_id(listing: Listing) -> int | None:
+    return listing.global_id
 
-    # Get starting point
-    last_id = load_last_id()
-    if last_id is None:
-        # First run: get latest from ES
-        last_id = f.get_latest_id()
-        print(f"First run, starting from ES latest: {last_id}")
-    else:
-        print(f"Resuming from saved ID: {last_id}")
 
-    # Poll for new listings
-    max_id = last_id
-    count = 0
+def main() -> None:
+    with Funda() as client:
+        last_id = load_last_id()
+        if last_id is None:
+            last_id = client.latest_listing_id()
+            print(f"First run, starting from latest search ID: {last_id}")
+            save_last_id(last_id)
+            return
 
-    for listing in f.poll_new_listings(since_id=last_id):
-        count += 1
-        gid = listing["global_id"]
-        max_id = max(max_id, gid)
+        max_id = last_id
+        count = 0
+        for listing in client.new_listings(since_id=last_id):
+            count += 1
+            if listing_id(listing) is not None:
+                max_id = max(max_id, listing_id(listing))
 
-        print(f"New: {listing['title']}, {listing['city']}")
-        print(f"     €{listing['price']:,} - {listing.get('living_area', '?')} m²")
-        print(f"     {listing['url']}")
-        print()
+            price = listing.price.amount
+            price_text = f"EUR {price:,}" if price else "price unknown"
+            print(f"New: {listing.title}, {listing.city}")
+            print(f"     {price_text} - {listing.living_area or '?'} m2")
+            print(f"     {listing.url}")
+            print()
 
-    # Save state for next run
-    if count > 0:
-        save_last_id(max_id)
-        print(f"Found {count} new listings. Saved last ID: {max_id}")
-    else:
-        print("No new listings found.")
+    save_last_id(max_id)
+    print(f"Found {count} new listings. Saved last ID: {max_id}" if count else "No new listings found.")
 
 
 if __name__ == "__main__":

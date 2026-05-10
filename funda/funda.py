@@ -1,271 +1,81 @@
-"""Main Funda API class."""
+"""Public Funda client."""
 
-import random
 import re
 import time
-from typing import Any
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, ClassVar, TypeVar
+from urllib.parse import quote, urlencode
 
-from curl_cffi import requests
-import tls_client
-
-from funda.listing import Listing
-
-
-# API endpoints
-API_BASE = "https://listing-detail-page.funda.io/api/v4/listing/object/nl"
-API_LISTING = f"{API_BASE}/{{listing_id}}"
-API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
-API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
-API_CONTACTS = "https://contacts-flows-bff.funda.io/api/v1/contacts-flows/listings/{listing_id}/contact-block"
-API_CONTACT_FORM = "https://contacts-bff.funda.io/api/v4/contact/listings/{listing_id}/contact-form"
-API_LISTING_SUMMARY = "https://listing-detail-summary.funda.io/api/v1/listing/nl/{global_id}"
-API_SIMILAR = "https://local-listings.funda.io/api/v1/similarlistings"
-API_MARKET_INSIGHTS = "https://marketinsights.funda.io/v2/localinsights/preview/{city}/{neighbourhood}"
-API_BROKER_INFO = "https://brokerpresentation-office-pages-bff.funda.io/api/v3.0/office-page/Wonen/{broker_id}/nl"
-API_BROKER_LISTINGS = "https://brokerpresentation-office-pages-bff.funda.io/api/v3.0/office-page/Wonen/{broker_id}/nl/listings"
-API_BROKER_REVIEWS = "https://reviews-office-pages-bff.funda.io/api/v1/office-page/{broker_id}/reviews/nl"
-API_WALTER = "https://api.walterliving.com/hunter/lookup"
-
-# Funda mobile app JA3 fingerprints (captured from real Dart/Flutter app traffic)
-# JA3 without extension 21 - from favourites.funda.io
-# JA3 hash: 9225d95490794840d9d5f1f94d339285
-FUNDA_JA3 = "771,4867-4865-4866-52393-52392-49195-49199-49196-49200-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-13-51-45-43,29-23-24,0"
-
-# JA3 with extension 21 (padding) - from cdn-settings.segment.com
-# JA3 hash: 4bf8cdd8919b07d35ca824c20efb3537
-FUNDA_JA3_EXT21 = "771,4867-4865-4866-52393-52392-49195-49199-49196-49200-49161-49171-49162-49172-156-157-47-53,0-23-65281-10-11-35-13-51-45-43-21,29-23-24,0"
-
-# Fingerprint pool - tried in order until one works
-# Types: "tls_ja3", "curl_impersonate", "tls_client"
-FINGERPRINT_POOL = [
-    # tls_client with exact Funda app JA3 fingerprints
-    {"type": "tls_ja3", "ja3": FUNDA_JA3},
-    {"type": "tls_ja3", "ja3": FUNDA_JA3_EXT21},
-    # curl_cffi impersonate fallback - Safari works best with Funda headers
-    {"type": "curl_impersonate", "target": "safari15_5"},
-    {"type": "curl_impersonate", "target": "safari15_3"},
-    # tls_client preset profiles as final fallback
-    {"type": "tls_client", "identifier": "okhttp4_android_13"},
-    {"type": "tls_client", "identifier": "chrome_120"},
-]
-
-# Test endpoint to verify fingerprint works
-TEST_URL = f"{API_BASE}/tinyId/43117443"
+from funda._parallel import _ParallelRunner
+from funda._transport import _FundaTransport
+from funda.constants import (
+    API_BROKER_INFO,
+    API_BROKER_LISTINGS,
+    API_BROKER_REVIEWS,
+    API_CONTACT_FORM,
+    API_CONTACTS,
+    API_LISTING,
+    API_LISTING_SUMMARY,
+    API_LISTING_TINY,
+    API_MARKET_INSIGHTS,
+    API_SEARCH,
+    API_SIMILAR,
+    API_WALTER,
+    DEFAULT_MAX_RETRIES,
+    PAGE_SIZE,
+)
+from funda.exceptions import FundaRequestError, ListingNotFound, PriceHistoryError, SearchError
+from funda.listing import Listing, PriceHistory
+from funda.models import JsonDict
+from funda.parsing import (
+    parse_broker_info,
+    parse_broker_listings,
+    parse_broker_reviews,
+    parse_contact_form,
+    parse_contact_info,
+    parse_listing,
+    parse_listing_summary,
+    parse_market_insights,
+    parse_price_history,
+    parse_search_results,
+    parse_similar_listings,
+)
+from funda.search import _Search, _search_payload
 
 
-
-def _make_headers(for_search: bool = False) -> list[tuple[str, str]]:
-    """Generate headers matching the Funda Android app exactly.
-
-    Header order and values are captured from real Funda app traffic.
-    """
-    trace_id = str(random.randint(10**18, 10**19))
-    parent_id = hex(random.randint(10**15, 10**16))[2:]
-    tid = hex(int(time.time()))[2:] + "00000000"
-
-    # Base headers in exact order from app traffic
-    headers = [
-        ("user-agent", "Dart/3.9 (dart:io)"),
-        ("x-datadog-sampling-priority", "0"),
-        ("x-datadog-origin", "rum"),
-        ("tracestate", f"dd=s:0;o:rum;p:{parent_id}"),
-        ("accept-encoding", "gzip"),
-        ("x-datadog-parent-id", trace_id),
-    ]
-
-    if for_search:
-        # Search endpoint: content-type, referer, accept, then traceparent
-        headers.extend([
-            ("content-type", "application/json"),
-            ("referer", "https://www.funda.nl/"),
-            ("accept", "application/json"),
-        ])
-    else:
-        # Listing endpoint: x-funda-app-platform, content-type, then traceparent
-        headers.extend([
-            ("x-funda-app-platform", "android"),
-            ("content-type", "application/json"),
-        ])
-
-    # traceparent is always last
-    headers.append(("traceparent", f"00-{tid}{trace_id[:16]}-{parent_id}-00"))
-
-    return headers
+_TextValues = str | Sequence[str] | None
+_ListingInput = Listing | int | str
+_BrokerInput = Listing | int | str
+_Item = TypeVar("_Item")
+_Result = TypeVar("_Result")
 
 
-def _parse_area(value: str | None) -> int | None:
-    """Parse area string like '200 m²' or '2.960 m²' to integer."""
-    if not value:  # handles None and ''
-        return None
-    if isinstance(value, (int, float)):
-        return int(value)
-    # Remove ' m²' suffix and '.' thousand separator (Dutch locale)
-    cleaned = value.replace(' m²', '').replace('.', '')
-    return int(cleaned) if cleaned.isdigit() else None
-
-
+@dataclass(slots=True)
 class Funda:
-    """Main interface to Funda API.
+    """Main interface to Funda listings."""
 
-    Example:
-        >>> from funda import Funda
-        >>> f = Funda()
-        >>> listing = f.get_listing(43117443)
-        >>> print(listing['title'], listing['city'])
-        Reehorst 13 Luttenberg
-        >>> results = f.search_listing('amsterdam', price_max=500000)
-        >>> for r in results[:3]:
-        ...     print(r['title'], r['price'])
-    """
+    LISTING_ID_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"(?<!\d)(\d{7,9})(?!\d)")
 
-    TINYID_PATTERN = re.compile(r"/(\d{7,9})/?(?:\?|$|#)")
+    timeout: int = 30
+    max_retries: int = DEFAULT_MAX_RETRIES
+    retry_backoff: float = 0.1
 
-    def __init__(self, timeout: int = 30):
-        """Initialize Funda API client.
+    _transport: _FundaTransport = field(init=False, repr=False)
+    _parallel_runner: _ParallelRunner["Funda"] | None = field(default=None, init=False, repr=False)
 
-        Args:
-            timeout: Request timeout in seconds
-        """
-        self.timeout = timeout
-        self._curl_session: requests.Session | None = None
-        self._tls_session: tls_client.Session | None = None
-        self._fingerprint: dict | None = None
-
-    def _make_headers_dict(self, for_search: bool = False) -> dict[str, str]:
-        """Generate headers as dict for tls_client.
-
-        Header order and values match the real Funda Android app exactly.
-        """
-        trace_id = str(random.randint(10**18, 10**19))
-        parent_id = hex(random.randint(10**15, 10**16))[2:]
-        tid = hex(int(time.time()))[2:] + "00000000"
-
-        # Build headers in exact order from app traffic
-        # Python 3.7+ dicts preserve insertion order
-        headers = {
-            "user-agent": "Dart/3.9 (dart:io)",
-            "x-datadog-sampling-priority": "0",
-            "x-datadog-origin": "rum",
-            "tracestate": f"dd=s:0;o:rum;p:{parent_id}",
-            "accept-encoding": "gzip",
-            "x-datadog-parent-id": trace_id,
-        }
-
-        if for_search:
-            # Search endpoint: content-type, referer, accept, then traceparent
-            headers["content-type"] = "application/json"
-            headers["referer"] = "https://www.funda.nl/"
-            headers["accept"] = "application/json"
-        else:
-            # Listing endpoint: x-funda-app-platform, content-type, then traceparent
-            headers["x-funda-app-platform"] = "android"
-            headers["content-type"] = "application/json"
-
-        # traceparent is always last
-        headers["traceparent"] = f"00-{tid}{trace_id[:16]}-{parent_id}-00"
-
-        return headers
-
-    def _test_fingerprint(self, fingerprint: dict) -> bool:
-        """Test if a fingerprint works against Funda API."""
-        try:
-            fp_type = fingerprint["type"]
-            if fp_type == "tls_ja3":
-                # tls_client with custom JA3 - primary method for Funda app fingerprint
-                session = tls_client.Session(ja3_string=fingerprint["ja3"], random_tls_extension_order=False)
-                headers = self._make_headers_dict()
-                response = session.get(TEST_URL, headers=headers, timeout_seconds=5)
-            elif fp_type == "curl_ja3":
-                session = requests.Session()
-                headers = _make_headers()
-                response = session.get(TEST_URL, headers=headers, ja3=fingerprint["ja3"], timeout=5)
-                session.close()
-            elif fp_type == "curl_impersonate":
-                session = requests.Session(impersonate=fingerprint["target"])
-                headers = _make_headers()
-                response = session.get(TEST_URL, headers=headers, timeout=5)
-                session.close()
-            elif fp_type == "tls_client":
-                session = tls_client.Session(client_identifier=fingerprint["identifier"], random_tls_extension_order=False)
-                headers = self._make_headers_dict()
-                response = session.get(TEST_URL, headers=headers, timeout_seconds=5)
-            else:
-                return False
-            return response.status_code == 200
-        except Exception:
-            return False
-
-    def _find_working_fingerprint(self) -> dict:
-        """Find a working fingerprint from the pool."""
-        for fp in FINGERPRINT_POOL:
-            if self._test_fingerprint(fp):
-                return fp
-        raise RuntimeError("No working fingerprint found. Funda may have updated their bot detection.")
-
-    def _ensure_session(self) -> None:
-        """Ensure a working session is created."""
-        if self._fingerprint is None:
-            self._fingerprint = self._find_working_fingerprint()
-
-        fp_type = self._fingerprint["type"]
-        if fp_type == "tls_ja3":
-            # tls_client with custom JA3 - exact Funda app fingerprint
-            if self._tls_session is None:
-                self._tls_session = tls_client.Session(
-                    ja3_string=self._fingerprint["ja3"],
-                    random_tls_extension_order=False
-                )
-        elif fp_type == "curl_ja3":
-            if self._curl_session is None:
-                self._curl_session = requests.Session()
-        elif fp_type == "curl_impersonate":
-            if self._curl_session is None:
-                self._curl_session = requests.Session(impersonate=self._fingerprint["target"])
-        elif fp_type == "tls_client":
-            if self._tls_session is None:
-                self._tls_session = tls_client.Session(
-                    client_identifier=self._fingerprint["identifier"],
-                    random_tls_extension_order=False
-                )
-
-    def _get(self, url: str, headers_list: list[tuple[str, str]]) -> Any:
-        """Make GET request using the active session."""
-        self._ensure_session()
-        fp_type = self._fingerprint["type"]
-
-        if fp_type in ("tls_ja3", "tls_client"):
-            headers = self._make_headers_dict()
-            return self._tls_session.get(url, headers=headers, timeout_seconds=self.timeout)
-        elif fp_type == "curl_ja3":
-            return self._curl_session.get(url, headers=headers_list, ja3=self._fingerprint["ja3"], timeout=self.timeout)
-        else:
-            return self._curl_session.get(url, headers=headers_list, timeout=self.timeout)
-
-    def _post(self, url: str, headers_list: list[tuple[str, str]], data: str = None, json_data: dict = None, for_search: bool = False) -> Any:
-        """Make POST request using the active session."""
-        self._ensure_session()
-        fp_type = self._fingerprint["type"]
-
-        if fp_type in ("tls_ja3", "tls_client"):
-            headers = self._make_headers_dict(for_search=for_search)
-            if json_data:
-                return self._tls_session.post(url, headers=headers, json=json_data, timeout_seconds=self.timeout)
-            return self._tls_session.post(url, headers=headers, data=data, timeout_seconds=self.timeout)
-        elif fp_type == "curl_ja3":
-            if json_data:
-                return self._curl_session.post(url, headers=headers_list, json=json_data, ja3=self._fingerprint["ja3"], timeout=self.timeout)
-            return self._curl_session.post(url, headers=headers_list, data=data, ja3=self._fingerprint["ja3"], timeout=self.timeout)
-        else:
-            if json_data:
-                return self._curl_session.post(url, headers=headers_list, json=json_data, timeout=self.timeout)
-            return self._curl_session.post(url, headers=headers_list, data=data, timeout=self.timeout)
+    def __post_init__(self) -> None:
+        self._transport = _FundaTransport(
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            retry_backoff=self.retry_backoff,
+        )
 
     def close(self) -> None:
-        """Close the HTTP session."""
-        if self._curl_session:
-            self._curl_session.close()
-            self._curl_session = None
-        self._tls_session = None
+        if self._parallel_runner is not None:
+            self._parallel_runner.close()
+            self._parallel_runner = None
+        self._transport.close()
 
     def __enter__(self) -> "Funda":
         return self
@@ -273,1163 +83,377 @@ class Funda:
     def __exit__(self, *args) -> None:
         self.close()
 
-    # -------------------------------------------------------------------------
-    # Listing methods
-    # -------------------------------------------------------------------------
+    def listing(self, listing_id: int | str) -> Listing:
+        listing_id_str = self._listing_id_from_input(listing_id)
+        last_status = None
 
-    def get_listing(self, listing_id: int | str) -> Listing:
-        """Get a listing by ID or URL.
-
-        Args:
-            listing_id: Numeric ID (globalId or tinyId) or full URL
-
-        Returns:
-            Listing object with property data
-
-        Example:
-            >>> f.get_listing(43117443)
-            >>> f.get_listing('https://www.funda.nl/detail/koop/city/house-123/43117443/')
-        """
-        # If it's a URL, extract tinyId
-        if isinstance(listing_id, str) and 'funda.nl' in listing_id:
-            match = self.TINYID_PATTERN.search(listing_id)
-            if not match:
-                raise ValueError(f"Could not extract listing ID from URL: {listing_id}")
-            listing_id = match.group(1)
-
-        # Try tinyId endpoint first (8-9 digits), then globalId (7 digits)
-        listing_id_str = str(listing_id)
-        if len(listing_id_str) >= 8:
-            url = API_LISTING_TINY.format(tiny_id=listing_id_str)
-        else:
-            url = API_LISTING.format(listing_id=listing_id_str)
-
-        headers = _make_headers()
-        response = self._get(url, headers)
-
-        # If tinyId fails, try as globalId
-        if response.status_code == 404 and len(listing_id_str) >= 8:
-            url = API_LISTING.format(listing_id=listing_id_str)
-            headers = _make_headers()
-            response = self._get(url, headers)
-
-        if response.status_code != 200:
-            raise LookupError(f"Listing {listing_id} not found")
-
-        data = response.json()
-        return self._parse_listing(data)
-
-    def search_listing(
-        self,
-        location: str | list[str] | None = None,
-        offering_type: str = "buy",
-        availability: str | list[str] | None = None,
-        price_min: int | None = None,
-        price_max: int | None = None,
-        area_min: int | None = None,
-        area_max: int | None = None,
-        plot_min: int | None = None,
-        plot_max: int | None = None,
-        object_type: list[str] | None = None,
-        energy_label: list[str] | None = None,
-        construction_type: str | list[str] | None = None,
-        construction_year_min: int | None = None,
-        construction_year_max: int | None = None,
-        radius_km: int | None = None,
-        sort: str | None = None,
-        page: int = 0,
-    ) -> list[Listing]:
-        """Search for listings.
-
-        Args:
-            location: City/area name(s) or postcode to search in
-            offering_type: "buy" or "rent"
-            availability: Filter by status - "available", "negotiations", "sold",
-                or a list combining them. Default: ["available", "negotiations"]
-            price_min: Minimum price
-            price_max: Maximum price
-            area_min: Minimum living area in m²
-            area_max: Maximum living area in m²
-            plot_min: Minimum plot area in m²
-            plot_max: Maximum plot area in m²
-            object_type: Property types (e.g. ["house", "apartment"])
-            energy_label: Energy labels (e.g. ["A", "A+", "A++"])
-            construction_type: "resale" or "newly_built", or a list of both
-            construction_year_min: Minimum construction year (maps to Funda periods)
-            construction_year_max: Maximum construction year (maps to Funda periods)
-            radius_km: Search radius in km (use with single location/postcode)
-            sort: Sort order - "newest", "oldest", "price_asc", "price_desc",
-                  "area_asc", "area_desc", "plot_desc", "city", "postcode", or None
-            page: Page number (0-indexed, 15 results per page)
-
-        Returns:
-            List of Listing objects (max 15 per page)
-
-        Example:
-            >>> f.search_listing('amsterdam', price_max=500000)
-            >>> f.search_listing('amsterdam', availability='sold')  # sold listings
-            >>> f.search_listing('1012AB', radius_km=30, price_max=1250000, energy_label=['A', 'A+'])
-        """
-        import json
-
-        # Normalize location to list
-        locations = None
-        if location:
-            locations = [location] if isinstance(location, str) else list(location)
-
-        # Normalize availability - map user-friendly "sold" to API's "unavailable"
-        if availability is None:
-            avail_list = ["available", "negotiations"]
-        elif isinstance(availability, str):
-            avail_list = [availability]
-        else:
-            avail_list = list(availability)
-        # Map "sold" to "unavailable" (API terminology)
-        avail_list = ["unavailable" if v == "sold" else v for v in avail_list]
-
-        # Build search params
-        params: dict[str, Any] = {
-            "availability": avail_list,
-            "type": ["single"],
-            "zoning": ["residential"],
-            "object_type": object_type or ["house", "apartment"],
-            "publication_date": {"no_preference": True},
-            "offering_type": offering_type,
-            "page": {"from": page * 15},
-        }
-
-        # Sort
-        sort_map = {
-            "newest": ("publish_date_utc", "desc"),
-            "oldest": ("publish_date_utc", "asc"),
-            "price_asc": ("price.selling_price", "asc"),
-            "price_desc": ("price.selling_price", "desc"),
-            "area_asc": ("floor_area", "asc"),
-            "area_desc": ("floor_area", "desc"),
-            "plot_desc": ("plot_area", "desc"),
-            "city": ("address.city", "asc"),
-            "postcode": ("address.postal_code", "asc"),
-        }
-        if sort and sort in sort_map:
-            field, order = sort_map[sort]
-            params["sort"] = {"field": field, "order": order}
-        else:
-            params["sort"] = {"field": None, "order": None}
-
-        # Location - either radius search or selected_area
-        if locations and radius_km and len(locations) == 1:
-            # Radius search from postcode or city
-            # Valid radius values in the geo index
-            valid_radii = [1, 2, 5, 10, 15, 30, 50]
-            actual_radius = min(valid_radii, key=lambda x: abs(x - radius_km))
-            loc_id = locations[0].lower().replace(" ", "-") + "-0"
-            params["radius_search"] = {
-                "index": "geo-wonen-alias-prod",
-                "id": loc_id,
-                "path": f"area_with_radius.{actual_radius}",
-            }
-        elif locations:
-            params["selected_area"] = [loc.lower() for loc in locations]
-
-        # Price filter - format depends on offering type
-        if price_min is not None or price_max is not None:
-            price_key = "selling_price" if offering_type == "buy" else "rent_price"
-            price_filter: dict[str, Any] = {}
-            if price_min:
-                price_filter["from"] = price_min
-            if price_max:
-                price_filter["to"] = price_max
-            params["price"] = {price_key: price_filter}
-
-        # Living area filter
-        if area_min is not None or area_max is not None:
-            floor_filter: dict[str, Any] = {}
-            if area_min:
-                floor_filter["from"] = area_min
-            if area_max:
-                floor_filter["to"] = area_max
-            params["floor_area"] = floor_filter
-
-        # Plot area filter
-        if plot_min is not None or plot_max is not None:
-            plot_filter: dict[str, Any] = {}
-            if plot_min:
-                plot_filter["from"] = plot_min
-            if plot_max:
-                plot_filter["to"] = plot_max
-            params["plot_area"] = plot_filter
-
-        # Energy label filter
-        if energy_label:
-            params["energy_label"] = energy_label
-
-        # Construction type filter
-        if construction_type:
-            if isinstance(construction_type, str):
-                params["construction_type"] = [construction_type]
-            else:
-                params["construction_type"] = list(construction_type)
-
-        # Construction year filter (mapped to Funda's predefined periods)
-        if construction_year_min is not None or construction_year_max is not None:
-            period_boundaries = [1906, 1931, 1945, 1960, 1971, 1981, 1991, 2001, 2011, 2021]
-            all_periods = (
-                ["before_1906"]
-                + [f"from_{period_boundaries[i]}_to_{period_boundaries[i+1]-1}" for i in range(len(period_boundaries) - 1)]
-                + ["after_2020"]
-            )
-            # Map each period to its year range for filtering
-            period_ranges = {
-                "before_1906": (0, 1905),
-                "from_1906_to_1930": (1906, 1930),
-                "from_1931_to_1944": (1931, 1944),
-                "from_1945_to_1959": (1945, 1959),
-                "from_1960_to_1970": (1960, 1970),
-                "from_1971_to_1980": (1971, 1980),
-                "from_1981_to_1990": (1981, 1990),
-                "from_1991_to_2000": (1991, 2000),
-                "from_2001_to_2010": (2001, 2010),
-                "from_2011_to_2020": (2011, 2020),
-                "after_2020": (2021, 9999),
-            }
-            year_min = construction_year_min or 0
-            year_max = construction_year_max or 9999
-            selected = [p for p in all_periods if period_ranges[p][1] >= year_min and period_ranges[p][0] <= year_max]
-            if selected:
-                params["construction_period"] = selected
-
-        # Build NDJSON query
-        index_line = json.dumps({"index": "listings-wonen-searcher-alias-prod"})
-        query_line = json.dumps({"id": "search_result_20250805", "params": params})
-        query = f"{index_line}\n{query_line}\n"
-
-        # Retry on intermittent 400 errors from API
-        for attempt in range(3):
-            headers = _make_headers(for_search=True)
-            response = self._post(API_SEARCH, headers, data=query, for_search=True)
+        for url in self._listing_urls(listing_id_str):
+            response = self._transport.get(url)
+            last_status = response.status_code
             if response.status_code == 200:
-                break
-            if response.status_code == 400 and attempt < 2:
-                time.sleep(0.1 * (attempt + 1))
-                continue
-            raise RuntimeError(f"Search failed (status {response.status_code})")
+                return parse_listing(response.json())
+            if response.status_code != 404:
+                raise FundaRequestError(
+                    f"Listing {listing_id_str} request failed "
+                    f"(status {response.status_code})"
+                )
 
-        data = response.json()
-        return self._parse_search_results(data)
+        raise ListingNotFound(f"Listing {listing_id_str} not found (status {last_status})")
 
-    # -------------------------------------------------------------------------
-    # Parsing methods
-    # -------------------------------------------------------------------------
-
-    def _parse_listing(self, data: dict) -> Listing:
-        """Parse API response into Listing object."""
-        identifiers = data.get("Identifiers", {})
-        address = data.get("AddressDetails", {})
-        price_data = data.get("Price", {})
-        coords = data.get("Coordinates", {})
-        media = data.get("Media", {})
-        fast_view = data.get("FastView", {})
-        ads = data.get("Advertising", {}).get("TargetingOptions", {})
-
-        # Build listing data
-        listing_data = {
-            "global_id": identifiers.get("GlobalId"),
-            "tiny_id": identifiers.get("TinyId"),
-            "title": address.get("Title"),
-            "city": address.get("City"),
-            "postcode": address.get("PostCode"),
-            "province": address.get("Province"),
-            "neighbourhood": address.get("NeighborhoodName"),
-            "house_number": address.get("HouseNumber"),
-            "house_number_ext": address.get("HouseNumberExtension"),
-            "municipality": ads.get("gemeente"),
-            "price": price_data.get("NumericSellingPrice") or price_data.get("NumericRentalPrice"),
-            "price_formatted": price_data.get("SellingPrice") or price_data.get("RentalPrice"),
-            "offering_type": data.get("OfferingType"),
-            "object_type": data.get("ObjectType"),
-            "construction_type": data.get("ConstructionType"),
-            "status": "sold" if data.get("IsSoldOrRented") else "available",
-            "energy_label": fast_view.get("EnergyLabel"),
-            "living_area": int(ads["woonoppervlakte"]) if ads.get("woonoppervlakte", "").isdigit() else _parse_area(fast_view.get("LivingArea")),
-            "living_area_formatted": fast_view.get("LivingArea"),
-            "plot_area": int(ads["perceeloppervlakte"]) if ads.get("perceeloppervlakte", "").isdigit() else _parse_area(fast_view.get("PlotArea")),
-            "plot_area_formatted": fast_view.get("PlotArea"),
-            "bedrooms": fast_view.get("NumberOfBedrooms"),
-            "rooms": int(ads["aantalkamers"]) if ads.get("aantalkamers") else None,
-            "construction_year": int(ads["bouwjaar"]) if ads.get("bouwjaar") and ads["bouwjaar"].isdigit() else None,
-            "description": data.get("ListingDescription", {}).get("Description"),
-            "highlight": data.get("Promo", {}).get("Blikvanger", {}).get("Text"),
-            "publication_date": data.get("PublicationDate"),
-            # Booleans
-            "has_garden": ads.get("tuin") == "true",
-            "has_balcony": ads.get("balkon") == "true",
-            "has_solar_panels": ads.get("zonnepanelen") == "true",
-            "has_heat_pump": ads.get("warmtepomp") == "true",
-            "has_roof_terrace": ads.get("dakterras") == "true",
-            "has_parking_on_site": ads.get("parkeergelegenheidopeigenterrein") == "true",
-            "has_parking_enclosed": ads.get("parkeergelegenheidopafgeslotenterrein") == "true",
-            "open_house": ads.get("openhuis") == "true",
-            "is_auction": price_data.get("IsAuction", False),
-            "is_energy_efficient": ads.get("energiezuinig") == "true",
-            "is_monument": ads.get("monumentalestatus") == "true",
-            "is_fixer_upper": ads.get("kluswoning") == "true",
-            "house_type": ads.get("soortwoning"),
-            # URLs
-            "google_maps_url": data.get("GoogleMapsObjectUrl"),
-            "share_url": data.get("Share", {}).get("Url"),
-            "brochure_url": media.get("Brochure", {}).get("CdnUrl"),
-        }
-
-        # Coordinates
-        if coords.get("Latitude") and coords.get("Longitude"):
-            listing_data["latitude"] = float(coords["Latitude"])
-            listing_data["longitude"] = float(coords["Longitude"])
-            listing_data["coordinates"] = (listing_data["latitude"], listing_data["longitude"])
-
-        # Photos - IDs and full URLs
-        photos_data = media.get("Photos", {})
-        photo_base = photos_data.get("MediaBaseUrl", "").replace("{id}", "{}")
-        photo_items = photos_data.get("Items", [])
-        listing_data["photos"] = [p.get("Id") for p in photo_items if p.get("Id")]
-        listing_data["photo_urls"] = [photo_base.format(p["Id"]) for p in photo_items if p.get("Id")] if photo_base else []
-        listing_data["photo_count"] = len(listing_data["photos"])
-
-        # Floorplans
-        floorplans_data = media.get("LegacyFloorPlan", {})
-        floorplan_base = floorplans_data.get("ThumbnailBaseUrl", "").replace("{id}", "{}")
-        floorplan_items = floorplans_data.get("Items", [])
-        listing_data["floorplans"] = [f.get("Id") for f in floorplan_items if f.get("Id")]
-        listing_data["floorplan_urls"] = [
-            floorplan_base.format(f["ThumbnailId"])
-            for f in floorplan_items if f.get("ThumbnailId")
-        ] if floorplan_base else []
-
-        # Videos
-        videos_data = media.get("Videos", {})
-        video_base = videos_data.get("MediaBaseUrl", "").replace("{id}", "{}")
-        video_items = videos_data.get("Items", [])
-        listing_data["videos"] = [v.get("Id") for v in video_items if v.get("Id")]
-        listing_data["video_urls"] = [video_base.format(v["Id"]) for v in video_items if v.get("Id")] if video_base else []
-
-        # 360 Photos
-        photos360_data = media.get("LegacyPhotos360", {})
-        photos360_base = photos360_data.get("ThumbnailBaseUrl", "").replace("{id}", "{}")
-        photos360_items = photos360_data.get("Items", [])
-        listing_data["photos_360"] = [
-            {"name": p.get("DisplayName"), "id": p.get("Id"), "url": photos360_base.format(p["Id"]) if photos360_base else None}
-            for p in photos360_items if p.get("Id")
-        ]
-
-        # URL
-        city_slug = address.get("City", "").lower().replace(" ", "-")
-        title_slug = address.get("Title", "").lower().replace(" ", "-")
-        tiny_id = identifiers.get("TinyId")
-        offering = "koop" if data.get("OfferingType") == "Sale" else "huur"
-        listing_data["url"] = f"https://www.funda.nl/detail/{offering}/{city_slug}/{title_slug}/{tiny_id}/"
-
-        # Characteristics
-        characteristics = {}
-        for section in data.get("KenmerkSections", []):
-            for item in section.get("KenmerkenList", []):
-                if item.get("Label") and item.get("Value"):
-                    characteristics[item["Label"]] = item["Value"]
-        listing_data["characteristics"] = characteristics
-
-        # Extract specific fields from characteristics
-        listing_data["offered_since"] = characteristics.get("Aangeboden sinds")
-        listing_data["acceptance"] = characteristics.get("Aanvaarding")
-        listing_data["price_per_m2"] = characteristics.get("Vraagprijs per m²")
-
-        # Broker
-        tracking = data.get("Tracking", {}).get("Values", {})
-        brokers = tracking.get("brokers", [])
-        if brokers:
-            listing_data["broker_id"] = brokers[0].get("broker_id")
-            listing_data["broker_association"] = brokers[0].get("broker_association")
-
-        # Insights
-        insights = data.get("ObjectInsights", {})
-        if insights:
-            listing_data["views"] = insights.get("Views")
-            listing_data["saves"] = insights.get("Saves")
-
-        return Listing(
-            listing_id=identifiers.get("TinyId") or identifiers.get("GlobalId"),
-            data=listing_data
+    def listings(self, listing_ids: Iterable[int | str], *, workers: int = 8) -> list[Listing]:
+        return self._parallel(
+            lambda client, listing_id: client.listing(listing_id),
+            listing_ids,
+            workers=workers,
         )
 
-    def get_latest_id(self) -> int:
-        """Get the latest listing ID from ES search.
+    def search(
+        self,
+        location: _TextValues = None,
+        **filters,
+    ) -> list[Listing]:
+        return self._search_results(_Search.from_filters(location, **filters))
 
-        Useful as a starting point for poll_new_listings if you don't
-        have a saved ID.
+    def iter_search(
+        self,
+        location: _TextValues = None,
+        *,
+        start_page: int = 0,
+        max_pages: int | None = None,
+        workers: int = 1,
+        **filters,
+    ) -> Iterator[Listing]:
+        if start_page < 0:
+            raise ValueError("start_page must be >= 0")
+        if max_pages is not None and max_pages < 0:
+            raise ValueError("max_pages must be >= 0")
+        if workers < 1:
+            raise ValueError("workers must be >= 1")
+        if "page" in filters:
+            raise ValueError("iter_search manages pages; use start_page instead of page")
+        if workers > 1 and max_pages is None:
+            raise ValueError("parallel iter_search requires max_pages")
 
-        Returns:
-            The highest global_id currently in the search index.
-        """
-        results = self.search_listing(offering_type="buy", sort="newest", page=0)
-        if not results:
-            raise RuntimeError("Could not fetch latest listings from search")
-        return max(int(r["global_id"]) for r in results)
+        search = _Search.from_filters(location, **filters)
+        if workers > 1:
+            searches = [
+                search.with_page(page)
+                for page in range(start_page, start_page + (max_pages or 0))
+            ]
+            for listings in self._parallel(
+                lambda client, page_search: client._search_results(page_search),
+                searches,
+                workers=workers,
+            ):
+                if not listings:
+                    break
+                yield from listings
+                if len(listings) < PAGE_SIZE:
+                    break
+            return
 
-    def poll_new_listings(
+        page = start_page
+        fetched_pages = 0
+        while max_pages is None or fetched_pages < max_pages:
+            listings = self._search_results(search.with_page(page))
+            if not listings:
+                break
+            yield from listings
+            fetched_pages += 1
+            if len(listings) < PAGE_SIZE:
+                break
+            page += 1
+
+    def latest_listing_id(self) -> int:
+        listings = self.search(sort="newest")
+        if not listings:
+            raise SearchError("Could not fetch latest listings from search")
+        global_ids = [listing.global_id for listing in listings if listing.global_id is not None]
+        if not global_ids:
+            raise SearchError("Search results did not include listing IDs")
+        return max(global_ids)
+
+    def new_listings(
         self,
         since_id: int,
         max_consecutive_404s: int = 20,
-        offering_type: str | None = None,
-    ):
-        """Poll for new listings by incrementing IDs.
+    ) -> Iterator[Listing]:
+        if max_consecutive_404s < 1:
+            raise ValueError("max_consecutive_404s must be >= 1")
 
-        Generator that yields listings by directly querying the detail API,
-        bypassing ES search. This catches listings that ES hasn't indexed yet.
-
-        Args:
-            since_id: Start polling from this ID + 1.
-            max_consecutive_404s: Stop after this many consecutive 404s (default 20).
-            offering_type: Filter by "buy" or "rent" (default: return all).
-
-        Yields:
-            Listing objects as they are found.
-
-        Example:
-            >>> f = Funda()
-            >>> for listing in f.poll_new_listings(since_id=7852306):
-            ...     print(listing['title'], listing['city'])
-            ...     save_to_db(listing)  # process immediately
-        """
         consecutive_404s = 0
         current_id = since_id + 1
-
         while consecutive_404s < max_consecutive_404s:
-            url = API_LISTING.format(listing_id=current_id)
-            try:
-                headers = _make_headers()
-                response = self._get(url, headers)
-
-                if response.status_code == 200:
-                    consecutive_404s = 0
-                    data = response.json()
-
-                    # Filter by offering type if specified
-                    if offering_type:
-                        listing_offering = data.get("OfferingType", "")
-                        expected = "Sale" if offering_type == "buy" else "Rental"
-                        if listing_offering != expected:
-                            current_id += 1
-                            continue
-
-                    yield self._parse_listing(data)
-                else:
-                    consecutive_404s += 1
-
-            except requests.errors.RequestsError:
+            response = self._transport.get(API_LISTING.format(listing_id=current_id))
+            if response.status_code == 200:
+                consecutive_404s = 0
+                yield parse_listing(response.json())
+            elif response.status_code == 404:
                 consecutive_404s += 1
+            else:
+                raise FundaRequestError(
+                    f"Listing {current_id} request failed "
+                    f"(status {response.status_code})"
+                )
 
             current_id += 1
 
-    def get_price_history(self, listing: Listing | str) -> list[dict]:
-        """Get historical price data for a listing.
-
-        Fetches price history from Walter Living API, including:
-        - Previous asking prices
-        - WOZ tax assessments
-        - Previous sales
-
-        Args:
-            listing: A Listing object or Funda URL string
-
-        Returns:
-            List of price changes, each containing:
-            - price: Numeric price
-            - human_price: Formatted price (e.g., "€400.000")
-            - date: Human readable date
-            - timestamp: ISO timestamp
-            - source: "Funda" or "WOZ"
-            - status: "asking_price", "sold", or "woz"
-
-        Example:
-            >>> listing = f.get_listing(89666837)
-            >>> history = f.get_price_history(listing)
-            >>> for change in history:
-            ...     print(change['date'], change['human_price'], change['status'])
-            15 jan, 2026 €400.000 asking_price
-            1 jan, 2025 €376.000 woz
-            8 mrt, 2023 €325.000 asking_price
-        """
-        # Extract data from Listing or fetch if URL provided
+    def price_history(self, listing: Listing | str) -> PriceHistory:
         if isinstance(listing, str):
-            listing = self.get_listing(listing)
+            listing = self.listing(listing)
 
-        url = listing.get("url")
-        address = listing.get("title")
-        postcode = listing.get("postcode")
-
-        if not all([url, address, postcode]):
-            raise ValueError("Listing must have url, title (address), and postcode")
+        if not listing.url or not listing.title or not listing.postcode:
+            raise PriceHistoryError("Listing must have url, title, and postcode")
 
         payload = {
-            "url": url,
-            "address": address,
-            "zipcode": postcode,
+            "url": listing.url,
+            "address": listing.title,
+            "zipcode": listing.postcode,
         }
-
-        walter_headers = [
-            ("Accept", "application/json"),
-            ("Content-Type", "application/json"),
-        ]
-        response = self._post(API_WALTER, walter_headers, json_data=payload)
-
+        response = self._transport.post(API_WALTER, profile="walter", json_data=payload)
         if response.status_code != 200:
-            raise LookupError(f"Could not fetch price history (status {response.status_code})")
-
+            raise PriceHistoryError(
+                f"Could not fetch price history (status {response.status_code})"
+            )
         data = response.json()
         if data.get("status") != "ok":
-            raise LookupError("Price history not available for this listing")
+            raise PriceHistoryError("Price history not available for this listing")
+        return parse_price_history(data)
 
-        # Translate Dutch status to English
-        status_map = {
-            "Vraagprijs": "asking_price",
-            "Verkocht": "sold",
-            "WOZ": "woz",
-        }
-
-        changes = data.get("changes", [])
-        for change in changes:
-            if "status" in change:
-                change["status"] = status_map.get(change["status"], change["status"])
-
-        return changes
-
-    def _resolve_global_id(self, listing: "Listing | int | str") -> int:
-        """Resolve any listing identifier to a numeric globalId.
-
-        Funda has two id systems: the 7-digit ``globalId`` used internally by
-        most APIs, and the 8-9 digit ``tinyId`` shown in funda.nl URLs. Many
-        endpoints (contact-block, listing-detail-summary, similarlistings,
-        contact-form) only accept the globalId, so tinyIds and URLs need to
-        be resolved through ``get_listing`` first.
-        """
-        if isinstance(listing, Listing):
-            gid = listing.get("global_id")
-            if not gid:
-                raise ValueError("Listing has no global_id")
-            return int(gid)
-        if isinstance(listing, str) and "funda.nl" in listing:
-            gid = self.get_listing(listing).get("global_id")
-            if not gid:
-                raise ValueError("Could not resolve URL to global_id")
-            return int(gid)
-        id_str = str(listing)
-        if not id_str.isdigit():
-            raise ValueError(f"Unrecognized listing identifier: {listing!r}")
-        if len(id_str) >= 8:  # tinyId — needs resolution
-            gid = self.get_listing(int(id_str)).get("global_id")
-            if not gid:
-                raise ValueError(f"Could not resolve tinyId {id_str}")
-            return int(gid)
-        return int(id_str)
-
-    def get_contact_info(self, listing: "Listing | int | str") -> dict:
-        """Get realtor/makelaar contact info for a listing.
-
-        Returns the agency name, phone number, and association code as exposed
-        by the Funda Android app's contact block endpoint.
-
-        Args:
-            listing: A Listing object, a numeric id (globalId or tinyId), or a
-                Funda URL. tinyIds and URLs are resolved to a globalId via
-                ``get_listing`` before the contact lookup.
-
-        Returns:
-            Dict with the primary broker hoisted to the top level for
-            ergonomics (``name``, ``phone``, ``broker_id``, ``association``)
-            plus listing meta (``listing_id``, ``tiny_id``, ``listing_status``)
-            and the full ``brokers`` list for the rare multi-agency case.
-
-        Raises:
-            LookupError: Listing exists but has no contact info (HTTP 204) or
-                the endpoint returned a non-200 status.
-
-        Example:
-            >>> listing = f.get_listing(43333315)
-            >>> contact = f.get_contact_info(listing)
-            >>> contact['name'], contact['phone']
-            ('Scheffer Makelaardij B.V.', '020-2470322')
-        """
+    def contact_info(self, listing: _ListingInput) -> JsonDict:
+        """Get realtor contact info for a listing."""
         global_id = self._resolve_global_id(listing)
-        url = API_CONTACTS.format(listing_id=global_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
+        data = self._get_json(
+            API_CONTACTS.format(listing_id=global_id),
+            error="Could not fetch contact info",
+            missing={
+                204: f"Listing {global_id} has no contact info",
+                404: f"Listing {global_id} not found",
+            },
+        )
+        return parse_contact_info(data)
 
-        if response.status_code == 204:
-            raise LookupError(f"Listing {global_id} has no contact info")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch contact info (status {response.status_code})"
-            )
-
-        return self._parse_contact_info(response.json())
-
-    def get_contact_form(self, listing: "Listing | int | str") -> dict:
-        """Get contact-form availability (days and times-of-day) for a listing.
-
-        Companion to ``get_contact_info``. Tells you which weekdays and
-        times-of-day the agency accepts inquiries through the in-app form.
-
-        Returns:
-            Dict with the primary office hoisted to the top level
-            (``office_id``, ``office_name``, ``days``, ``times_of_day``,
-            ``is_contacting_enabled``, ``is_viewing_planner_enabled``) plus
-            the raw ``offices`` list.
-
-        Example:
-            >>> form = f.get_contact_form(43333315)
-            >>> form['days']
-            ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
-            >>> form['times_of_day']
-            ['Morning', 'Afternoon']
-        """
+    def contact_form(self, listing: _ListingInput) -> JsonDict:
+        """Get contact-form availability for a listing."""
         global_id = self._resolve_global_id(listing)
-        url = API_CONTACT_FORM.format(listing_id=global_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
-
-        if response.status_code == 204:
-            raise LookupError(f"Listing {global_id} has no contact form")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch contact form (status {response.status_code})"
-            )
-
-        data = response.json()
+        data = self._get_json(
+            API_CONTACT_FORM.format(listing_id=global_id),
+            error="Could not fetch contact form",
+            missing={
+                204: f"Listing {global_id} has no contact form",
+                404: f"Listing {global_id} not found",
+            },
+        )
         if not data:
             raise LookupError(f"No contact form entries for listing {global_id}")
+        return parse_contact_form(data)
 
-        primary = data[0]
-        return {
-            "office_id": primary.get("officeId"),
-            "office_name": primary.get("officeName"),
-            "is_contacting_enabled": primary.get("isContactingEnabled"),
-            "is_viewing_planner_enabled": primary.get("isViewingPlannerEnabled"),
-            "days": primary.get("days", []),
-            "times_of_day": primary.get("timesOfDay", []),
-            "offices": data,
-        }
-
-    def get_listing_summary(self, listing: "Listing | int | str") -> Listing:
-        """Get a lightweight summary of a listing.
-
-        Faster and smaller than ``get_listing`` (no descriptions, photos, or
-        kenmerken). Useful for batch enrichment, e.g. fetching a row of
-        ``get_similar_listings`` results.
-
-        Returns:
-            Listing object with summary fields populated.
-
-        Example:
-            >>> summary = f.get_listing_summary(7985628)
-            >>> summary['title'], summary['price'], summary['energy_label']
-            ('Semarangstraat 13', 650000, 'C')
-        """
+    def listing_summary(self, listing: _ListingInput) -> Listing:
+        """Get a lightweight listing summary without the full detail payload."""
         global_id = self._resolve_global_id(listing)
-        url = API_LISTING_SUMMARY.format(global_id=global_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
+        data = self._get_json(
+            API_LISTING_SUMMARY.format(global_id=global_id),
+            error="Could not fetch listing summary",
+            missing={404: f"Listing summary {global_id} not found"},
+        )
+        return parse_listing_summary(data)
 
-        if response.status_code == 404:
-            raise LookupError(f"Listing summary {global_id} not found")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch listing summary (status {response.status_code})"
-            )
-
-        return self._parse_listing_summary(response.json())
-
-    def get_similar_listings(self, listing: "Listing | int | str") -> dict:
-        """Get globalIds of similar / recently-sold listings near this one.
-
-        Returns IDs only. Combine with ``get_listing_summary`` or
-        ``get_listing`` to materialize them.
-
-        Returns:
-            Dict with ``recently_listed`` and ``recently_sold``, each a list
-            of integer globalIds.
-
-        Example:
-            >>> sim = f.get_similar_listings(7988952)
-            >>> [f.get_listing_summary(gid)['title'] for gid in sim['recently_sold'][:3]]
-        """
+    def similar_listings(self, listing: _ListingInput) -> JsonDict:
+        """Get recently listed and recently sold globalIds near a listing."""
         global_id = self._resolve_global_id(listing)
-        url = f"{API_SIMILAR}?globalId={global_id}"
-        headers = _make_headers()
-        response = self._get(url, headers)
+        data = self._get_json(
+            f"{API_SIMILAR}?{urlencode({'globalId': global_id})}",
+            error="Could not fetch similar listings",
+        )
+        return parse_similar_listings(data)
 
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch similar listings (status {response.status_code})"
-            )
-
-        data = response.json()
-        return {
-            "recently_listed": [int(x["globalId"]) for x in data.get("recentlyListed", []) if x.get("globalId")],
-            "recently_sold": [int(x["globalId"]) for x in data.get("recentlySold", []) if x.get("globalId")],
-        }
-
-    def get_market_insights(
+    def market_insights(
         self,
-        city: "str | Listing",
+        city: str | Listing,
         neighbourhood: str | None = None,
-    ) -> dict:
-        """Get neighbourhood demographics and average €/m² for a location.
+    ) -> JsonDict:
+        """Get local market insight data for a city and neighbourhood."""
+        city_name, neighbourhood_name = self._market_location(city, neighbourhood)
+        city_slug = _market_slug(city_name)
+        neighbourhood_slug = _market_slug(neighbourhood_name)
+        data = self._get_json(
+            API_MARKET_INSIGHTS.format(city=city_slug, neighbourhood=neighbourhood_slug),
+            error="Could not fetch market insights",
+            missing={
+                204: f"No market insights for {city_slug}/{neighbourhood_slug}",
+                404: f"No market insights for {city_slug}/{neighbourhood_slug}",
+            },
+        )
+        return parse_market_insights(data)
 
-        Args:
-            city: Either a city name (string) or a Listing object, in which
-                case ``city`` and ``neighbourhood`` are taken from the
-                listing automatically.
-            neighbourhood: Neighbourhood name. Required if ``city`` is a
-                string; ignored if ``city`` is a Listing.
+    def broker_info(self, broker: _BrokerInput) -> JsonDict:
+        """Get a broker or agency profile."""
+        broker_id = self._resolve_broker_id(broker)
+        data = self._get_json(
+            API_BROKER_INFO.format(broker_id=broker_id),
+            error="Could not fetch broker info",
+            missing={
+                204: f"Broker {broker_id} not found",
+                404: f"Broker {broker_id} not found",
+            },
+        )
+        return parse_broker_info(data)
 
-        Returns:
-            Dict with ``city``, ``neighbourhood``, ``inhabitants``,
-            ``families_with_children_pct``, ``avg_asking_price_per_m2``.
+    def broker_listings(self, broker: _BrokerInput) -> list[JsonDict]:
+        """Get listings handled by a broker, tagged by status."""
+        broker_id = self._resolve_broker_id(broker)
+        data = self._get_json(
+            API_BROKER_LISTINGS.format(broker_id=broker_id),
+            error="Could not fetch broker listings",
+            missing={
+                204: f"Broker {broker_id} has no listings",
+                404: f"Broker {broker_id} not found",
+            },
+        )
+        return parse_broker_listings(data)
 
-        Example:
-            >>> f.get_market_insights('Amsterdam', 'Twiske-West')
-            {'city': 'Amsterdam', 'neighbourhood': 'Twiske-West',
-             'inhabitants': 2510, 'families_with_children_pct': 43.96,
-             'avg_asking_price_per_m2': 5975}
-            >>> # Or pass a Listing directly
-            >>> listing = f.get_listing(43333315)
-            >>> f.get_market_insights(listing)
-        """
-        if isinstance(city, Listing):
-            city_name = city.get("city") or ""
-            nb_name = city.get("neighbourhood") or ""
-            if not city_name or not nb_name:
-                raise ValueError(
-                    "Listing must have city and neighbourhood for market insights"
-                )
+    def broker_reviews(self, broker: _BrokerInput) -> JsonDict:
+        """Get review aggregates and recent review examples for a broker."""
+        broker_id = self._resolve_broker_id(broker)
+        data = self._get_json(
+            API_BROKER_REVIEWS.format(broker_id=broker_id),
+            error="Could not fetch broker reviews",
+            missing={
+                204: f"Broker {broker_id} has no reviews",
+                404: f"Broker {broker_id} not found",
+            },
+        )
+        return parse_broker_reviews(data)
+
+    def _get_json(
+        self,
+        url: str,
+        *,
+        error: str,
+        missing: Mapping[int, str] | None = None,
+    ) -> Any:
+        response = self._transport.get(url)
+        if response.status_code == 200:
+            return response.json()
+        if missing and response.status_code in missing:
+            raise LookupError(missing[response.status_code])
+        raise FundaRequestError(f"{error} (status {response.status_code})")
+
+    def _resolve_global_id(self, listing: _ListingInput) -> int:
+        if isinstance(listing, Listing):
+            if listing.global_id is not None:
+                return listing.global_id
+            listing_id = listing.id
+            if listing_id is None:
+                raise ValueError("Listing has no global_id")
         else:
-            if not neighbourhood:
-                raise ValueError("neighbourhood is required when city is a string")
-            city_name = city
-            nb_name = neighbourhood
+            listing_id = self._listing_id_from_input(listing)
 
-        city_slug = city_name.lower().replace(" ", "-")
-        nb_slug = nb_name.lower().replace(" ", "-")
+        if len(str(listing_id)) >= 8:
+            global_id = self.listing(listing_id).global_id
+            if global_id is None:
+                raise ValueError(f"Could not resolve tinyId {listing_id}")
+            return global_id
+        return int(listing_id)
 
-        url = API_MARKET_INSIGHTS.format(city=city_slug, neighbourhood=nb_slug)
-        headers = _make_headers()
-        response = self._get(url, headers)
-
-        if response.status_code == 204:
-            raise LookupError(
-                f"No market insights for {city_slug}/{nb_slug}"
-            )
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch market insights (status {response.status_code})"
-            )
-
-        data = response.json()
-        return {
-            "city": data.get("city"),
-            "neighbourhood": data.get("neighbourhood"),
-            "inhabitants": data.get("inhabitants"),
-            "families_with_children_pct": data.get("familiesWithChildren"),
-            "avg_asking_price_per_m2": data.get("averageAskingPricePerM2"),
-        }
-
-    def _resolve_broker_id(self, broker: "Listing | int | str") -> int:
-        """Resolve a broker reference (Listing, int, or numeric str) to an id.
-
-        The broker id (Funda calls it ``officeId``, internally ``broker_id``
-        on Listing objects) is shared across the broker-page endpoints.
-        """
+    def _resolve_broker_id(self, broker: _BrokerInput) -> int:
         if isinstance(broker, Listing):
-            bid = broker.get("broker_id")
-            if not bid:
+            primary = broker.broker
+            broker_id = (primary.id or primary.office_id) if primary else None
+            if not broker_id:
                 raise ValueError("Listing has no broker_id")
-            return int(bid)
-        id_str = str(broker)
-        if not id_str.isdigit():
+            return int(broker_id)
+
+        broker_id = str(broker).strip()
+        if not broker_id.isdigit():
             raise ValueError(f"Unrecognized broker identifier: {broker!r}")
-        return int(id_str)
+        return int(broker_id)
 
-    def get_broker_info(self, broker: "Listing | int | str") -> dict:
-        """Get a broker/agency profile page (phone, email, website, etc).
+    def _market_location(
+        self,
+        city: str | Listing,
+        neighbourhood: str | None,
+    ) -> tuple[str, str]:
+        if isinstance(city, Listing):
+            city_name = city.city or ""
+            neighbourhood_name = city.address.neighbourhood or ""
+            if not city_name or not neighbourhood_name:
+                raise ValueError("Listing must have city and neighbourhood for market insights")
+            return city_name, neighbourhood_name
 
-        Args:
-            broker: A Listing object (uses its ``broker_id``) or a numeric
-                broker id (also called ``officeId`` in the Funda app).
+        city_name = city.strip()
+        neighbourhood_name = neighbourhood.strip() if neighbourhood else ""
+        if not city_name or not neighbourhood_name:
+            raise ValueError("city and neighbourhood are required")
+        return city_name, neighbourhood_name
 
-        Returns:
-            Dict with the agency's display name, phone, email, website,
-            postal address, affiliation (NVM/VBO/…), description (HTML),
-            certificates, languages, services, and logo image URL set.
+    def _search(self, search: _Search) -> JsonDict:
+        payload = _search_payload(search)
+        for attempt in range(3):
+            response = self._transport.post(API_SEARCH, profile="search", data=payload)
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 400 and attempt < 2:
+                time.sleep(0.1 * (attempt + 1))
+                continue
 
-        Raises:
-            LookupError: Unknown broker id (HTTP 204) or non-200.
+            detail = getattr(response, "text", "")[:200]
+            suffix = f": {detail}" if detail else ""
+            raise SearchError(f"Search failed (status {response.status_code}){suffix}")
 
-        Example:
-            >>> info = f.get_broker_info(24716)
-            >>> info['name'], info['phone'], info['email']
-            ('Simone Dijkman Makelaardij', '075 7725155', 'info@simonedijkman.nl')
-        """
-        broker_id = self._resolve_broker_id(broker)
-        url = API_BROKER_INFO.format(broker_id=broker_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
+        raise SearchError("Search failed without a response")
 
-        if response.status_code == 204:
-            raise LookupError(f"Broker {broker_id} not found")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch broker info (status {response.status_code})"
-            )
+    def _search_results(self, search: _Search) -> list[Listing]:
+        return parse_search_results(self._search(search))
 
-        return self._parse_broker_info(response.json())
+    def _parallel(
+        self,
+        func: Callable[["Funda", _Item], _Result],
+        items: Iterable[_Item],
+        *,
+        workers: int,
+    ) -> list[_Result]:
+        if workers < 1:
+            raise ValueError("workers must be >= 1")
 
-    def get_broker_listings(self, broker: "Listing | int | str") -> list[dict]:
-        """Get every listing handled by a broker (sold, for-sale, purchased).
+        items = list(items)
+        if not items:
+            return []
+        if workers == 1 or len(items) == 1:
+            return [func(self, item) for item in items]
 
-        Returns a flat list of listing entries with a ``status`` field
-        ("sold", "for_sale", or "purchased"). Each entry includes price,
-        address, lat/lng, image, dates, and the ``tiny_id`` parsed from the
-        detail URL.
+        if self._parallel_runner is None:
+            self._parallel_runner = _ParallelRunner(self._parallel_client, lambda c: c.close())
+        return self._parallel_runner.map(func, items, workers=min(workers, len(items)))
 
-        Returns:
-            List of dicts, one per listing, sorted as the API returns them.
-
-        Example:
-            >>> listings = f.get_broker_listings(24716)
-            >>> sold = [l for l in listings if l['status'] == 'sold']
-            >>> len(sold), sold[0]['title'], sold[0]['transaction_date']
-        """
-        broker_id = self._resolve_broker_id(broker)
-        url = API_BROKER_LISTINGS.format(broker_id=broker_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
-
-        if response.status_code == 204:
-            raise LookupError(f"Broker {broker_id} has no listings")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch broker listings (status {response.status_code})"
-            )
-
-        return self._parse_broker_listings(response.json())
-
-    def get_broker_reviews(self, broker: "Listing | int | str") -> dict:
-        """Get customer reviews and aggregate scores for a broker.
-
-        Note that the API only returns a small sample of recent reviews,
-        not the full set — ``number_of_reviews`` reflects the total, while
-        ``reviews`` is a representative slice.
-
-        Returns:
-            Dict with aggregate ``average`` (float), ``number_of_reviews``,
-            ``selectivity_percentage``, a ``highlight`` review, and a list
-            of ``reviews`` (each with subscores, transaction_type, text).
-
-        Example:
-            >>> r = f.get_broker_reviews(24716)
-            >>> r['average'], r['number_of_reviews']
-            (9.3, 26)
-        """
-        broker_id = self._resolve_broker_id(broker)
-        url = API_BROKER_REVIEWS.format(broker_id=broker_id)
-        headers = _make_headers()
-        response = self._get(url, headers)
-
-        if response.status_code == 204:
-            raise LookupError(f"Broker {broker_id} has no reviews")
-        if response.status_code != 200:
-            raise LookupError(
-                f"Could not fetch broker reviews (status {response.status_code})"
-            )
-
-        return self._parse_broker_reviews(response.json())
-
-    def _parse_contact_info(self, data: dict) -> dict:
-        """Normalize the contact-block payload into a flat dict."""
-        brokers = [
-            {
-                "broker_id": b.get("id"),
-                "name": b.get("displayName"),
-                "phone": b.get("phoneNumber"),
-                "association": b.get("associationCode"),
-                "logo_url": b.get("logoUrl") or None,
-                "banner_url": b.get("bannerUrl"),
-                "is_contacting_enabled": b.get("isContactingEnabled"),
-                "personal_contact_info": b.get("personalContactBlockInfo"),
-            }
-            for b in data.get("contactBlockDetails", [])
-        ]
-
-        result: dict[str, Any] = {
-            "listing_id": data.get("id"),
-            "tiny_id": data.get("tinyId"),
-            "listing_status": data.get("listingStatus"),
-            "is_viewing_planner_enabled": data.get("isViewingPlannerEnabled"),
-            "brokers": brokers,
-        }
-
-        # Hoist primary broker fields to the top level (single-agency is the
-        # overwhelming common case).
-        if brokers:
-            primary = brokers[0]
-            result.update({
-                "broker_id": primary["broker_id"],
-                "name": primary["name"],
-                "phone": primary["phone"],
-                "association": primary["association"],
-                "logo_url": primary["logo_url"],
-                "banner_url": primary["banner_url"],
-                "is_contacting_enabled": primary["is_contacting_enabled"],
-                "personal_contact_info": primary["personal_contact_info"],
-            })
-
-        return result
-
-    def _parse_listing_summary(self, data: dict) -> Listing:
-        """Parse the lightweight listing-detail-summary payload."""
-        ids = data.get("identifiers", {})
-        addr = data.get("address", {})
-        fast = data.get("fastView", {})
-        price = data.get("price", {})
-        media = data.get("media", {})
-        brokers = data.get("brokers", []) or []
-        primary_broker = brokers[0] if brokers else {}
-        urls = data.get("urls", {}).get("friendlyUrl", {})
-        promo = data.get("promo", {}).get("blikvanger", {}) or {}
-        tracking = data.get("tracking", {}).get("values", {}) or {}
-
-        photo_base = media.get("thumbnailBaseUrl", "") or ""
-        photo_id = media.get("id")
-        thumbnail_url = None
-        if photo_base and photo_id:
-            thumbnail_url = photo_base.replace("{id}", str(photo_id)).replace(
-                "{size}", "720x480"
-            )
-
-        listing_data = {
-            "global_id": ids.get("globalId"),
-            "tiny_id": ids.get("tinyId"),
-            "title": addr.get("title"),
-            "subtitle": addr.get("subTitle"),
-            "city": addr.get("city"),
-            "postcode": addr.get("postCode"),
-            "price_formatted": price.get("sellingPrice") or price.get("rentalPrice"),
-            "price": tracking.get("listing_askingprice"),
-            "living_area_formatted": fast.get("livingArea"),
-            "living_area": _parse_area(fast.get("livingArea")),
-            "plot_area_formatted": fast.get("plotArea"),
-            "plot_area": _parse_area(fast.get("plotArea")),
-            "bedrooms": fast.get("numberOfBedrooms"),
-            "energy_label": fast.get("energyLabel"),
-            "object_type": tracking.get("listing_type"),
-            "offering_type": tracking.get("listing_offering_type"),
-            "status": tracking.get("listing_status"),
-            "is_sold_or_rented": data.get("isSoldOrRented"),
-            "publication_date": data.get("publicationDate"),
-            "highlight": promo.get("text"),
-            "broker_id": primary_broker.get("officeId"),
-            "broker_name": primary_broker.get("name"),
-            "url": urls.get("fullUrl"),
-            "share_url": data.get("share", {}).get("url"),
-            "thumbnail_url": thumbnail_url,
-        }
-
-        return Listing(
-            listing_id=ids.get("tinyId") or ids.get("globalId"),
-            data=listing_data,
+    def _parallel_client(self) -> "Funda":
+        return type(self)(
+            timeout=self.timeout,
+            max_retries=self.max_retries,
+            retry_backoff=self.retry_backoff,
         )
 
-    def _parse_broker_info(self, data: dict) -> dict:
-        """Normalize the broker office-page payload."""
-        office = data.get("officeId", {}) or {}
-        desc = data.get("description", {}) or {}
-        contact = data.get("contactDetails", {}) or {}
-        addr = contact.get("address", {}) or {}
-        media = data.get("mediaReferences", {}) or {}
-        chars = data.get("characteristics", {}) or {}
+    def _listing_id_from_input(self, listing_id: int | str) -> str:
+        if isinstance(listing_id, str) and "funda.nl" in listing_id:
+            path = listing_id.split("?", 1)[0].split("#", 1)[0]
+            matches = self.LISTING_ID_PATTERN.findall(path)
+            if not matches:
+                raise ValueError(f"Could not extract listing ID from URL: {listing_id}")
+            return matches[-1]
 
-        return {
-            "broker_id": office.get("officeNumber"),
-            "uuid": office.get("id"),
-            "name": data.get("displayName"),
-            "affiliation": data.get("affiliation"),
-            "slogan": desc.get("slogan"),
-            "description": desc.get("description"),
-            "short_description": desc.get("shortDescription"),
-            "email": contact.get("email"),
-            "website": contact.get("websiteUrl"),
-            "phone": contact.get("phoneNumber"),
-            "address": {
-                "street": addr.get("street"),
-                "number": addr.get("number"),
-                "addition": addr.get("addition"),
-                "postcode": addr.get("postcode"),
-                "city": addr.get("location"),
-            },
-            "logo_urls": media.get("logoImages") or None,
-            "languages": chars.get("languages", []),
-            "services": chars.get("services", []),
-            "certificates": chars.get("certificates", []),
-        }
+        listing_id_str = str(listing_id).strip()
+        if not listing_id_str:
+            raise ValueError("listing_id must not be empty")
+        if not self.LISTING_ID_PATTERN.fullmatch(listing_id_str):
+            raise ValueError("listing_id must be a 7-9 digit ID or a Funda URL")
+        return listing_id_str
 
-    def _parse_broker_listings(self, data: dict) -> list[dict]:
-        """Flatten the broker-listings payload into a list tagged by status."""
-        status_map = {
-            "Sold": "sold",
-            "ForSale": "for_sale",
-            "Purchased": "purchased",
-        }
-        tiny_re = re.compile(r"/detail/(\d+)/?")
-
-        out = []
-        for group in data.get("offering", []) or []:
-            api_status = group.get("type")
-            status = status_map.get(api_status, api_status.lower() if api_status else None)
-            for item in group.get("listings", []) or []:
-                loc = item.get("location", {}) or {}
-                addr = loc.get("address", {}) or {}
-                detail_url = item.get("detailUrl") or ""
-                tiny_match = tiny_re.search(detail_url)
-                street = addr.get("street") or ""
-                number = addr.get("number") or ""
-                addition = addr.get("addition") or ""
-                title = f"{street} {number}".strip()
-                if addition:
-                    title = f"{title}-{addition}" if number else f"{title} {addition}".strip()
-                out.append({
-                    "status": status,
-                    "listing_id": item.get("listingId"),
-                    "tiny_id": tiny_match.group(1) if tiny_match else None,
-                    "title": title or None,
-                    "street": addr.get("street"),
-                    "house_number": addr.get("number"),
-                    "house_number_ext": addr.get("addition") or None,
-                    "postcode": addr.get("postcode"),
-                    "city": addr.get("city"),
-                    "latitude": loc.get("latitude"),
-                    "longitude": loc.get("longitude"),
-                    "price": item.get("price"),
-                    "price_formatted": item.get("formattedPrice"),
-                    "price_type": item.get("priceType"),
-                    "price_condition": item.get("priceCondition"),
-                    "publication_date": item.get("publicationDate"),
-                    "transaction_date": item.get("transactionDate"),
-                    "image_url": item.get("image"),
-                    "detail_url": (
-                        f"https://www.funda.nl{detail_url}" if detail_url.startswith("/") else detail_url
-                    ) or None,
-                })
-        return out
-
-    def _parse_broker_reviews(self, data: dict) -> dict:
-        """Normalize the broker reviews payload."""
-        scores = data.get("scores", {}) or {}
-
-        def _flatten(review: dict | None) -> dict | None:
-            if not review:
-                return None
-            score = review.get("score", {}) or {}
-            return {
-                "date": review.get("postedDate"),
-                "transaction_type": review.get("transactionType"),
-                "text": review.get("text"),
-                "average": score.get("average"),
-                "expertise": score.get("expertise"),
-                "local_market_knowledge": score.get("localMarketKnowledge"),
-                "price_and_quality": score.get("priceAndQuality"),
-                "service_and_guidance": score.get("serviceAndGuidance"),
-            }
-
-        return {
-            "average": scores.get("average"),
-            "number_of_reviews": scores.get("numberOfReviews"),
-            "selectivity_percentage": scores.get("selectivityPercentage"),
-            "highlight": _flatten(data.get("highlightedReview")),
-            "reviews": [_flatten(r) for r in data.get("reviews", []) or []],
-        }
-
-    def _parse_search_results(self, data: dict) -> list[Listing]:
-        """Parse search API response into list of Listings."""
-        listings = []
-        responses = data.get("responses", [])
-
-        if not responses:
-            return listings
-
-        hits = responses[0].get("hits", {}).get("hits", [])
-
-        for hit in hits:
-            source = hit.get("_source", {})
-            address = source.get("address", {})
-
-            # Price
-            price_data = source.get("price", {})
-            if isinstance(price_data, dict):
-                price = price_data.get("selling_price", [None])[0]
-                if not price:
-                    price = price_data.get("rent_price", [None])[0] if price_data.get("rent_price") else None
-                price_condition = price_data.get("selling_price_condition") or price_data.get("rent_price_condition")
-            else:
-                price = price_data
-                price_condition = None
-
-            offering_types = source.get("offering_type", [])
-            offering_type = offering_types[0] if offering_types else None
-
-            agents = source.get("agent", [])
-            agent = agents[0] if agents else {}
-
-            street = address.get("street_name") or ""
-            number = address.get("house_number") or ""
-            suffix = address.get("house_number_suffix") or ""
-            title = f"{street} {number}".strip()
-            if suffix:
-                title = f"{title}-{suffix}" if number else f"{title} {suffix}".strip()
-
-            listing_data = {
-                "global_id": int(hit.get("_id", 0)),
-                "title": title,
-                "street_name": address.get("street_name"),
-                "house_number": address.get("house_number"),
-                "house_number_suffix": address.get("house_number_suffix"),
-                "house_number_ext": address.get("house_number_suffix"),
-                "city": address.get("city"),
-                "postcode": address.get("postal_code"),
-                "province": address.get("province"),
-                "neighbourhood": address.get("neighbourhood"),
-                "wijk": address.get("wijk"),
-                "price": price,
-                "price_condition": price_condition,
-                "living_area": source.get("floor_area", [None])[0] if source.get("floor_area") else None,
-                "plot_area": source.get("plot_area_range", {}).get("gte"),
-                "bedrooms": source.get("number_of_bedrooms"),
-                "rooms": source.get("number_of_rooms"),
-                "energy_label": source.get("energy_label"),
-                "object_type": source.get("object_type"),
-                "offering_type": offering_type,
-                "construction_type": source.get("construction_type"),
-                "publish_date": source.get("publish_date"),
-                "detail_url": source.get("object_detail_page_relative_url"),
-                "broker_id": agent.get("id"),
-                "broker_name": agent.get("name"),
-                "broker_association": agent.get("association"),
-                "photos": source.get("thumbnail_id", [])[:5],
-            }
-
-            listings.append(Listing(
-                listing_id=hit.get("_id"),
-                data=listing_data
-            ))
-
-        return listings
+    def _listing_urls(self, listing_id: str) -> tuple[str, ...]:
+        global_url = API_LISTING.format(listing_id=listing_id)
+        if len(listing_id) >= 8:
+            return API_LISTING_TINY.format(tiny_id=listing_id), global_url
+        return (global_url,)
 
 
-# Convenience alias
-FundaAPI = Funda
+def _market_slug(value: str) -> str:
+    return quote("-".join(value.strip().lower().split()), safe="-")
