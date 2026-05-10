@@ -421,7 +421,7 @@ class Funda:
                 "path": f"area_with_radius.{actual_radius}",
             }
         elif locations:
-            params["selected_area"] = locations
+            params["selected_area"] = [loc.lower() for loc in locations]
 
         # Price filter - format depends on offering type
         if price_min is not None or price_max is not None:
@@ -833,6 +833,7 @@ class Funda:
                 "postcode": address.get("postal_code"),
                 "province": address.get("province"),
                 "neighbourhood": address.get("neighbourhood"),
+                "wijk": address.get("wijk"),
                 "price": price,
                 "price_condition": price_condition,
                 "living_area": source.get("floor_area", [None])[0] if source.get("floor_area") else None,
