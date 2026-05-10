@@ -21,6 +21,9 @@ API_CONTACT_FORM = "https://contacts-bff.funda.io/api/v4/contact/listings/{listi
 API_LISTING_SUMMARY = "https://listing-detail-summary.funda.io/api/v1/listing/nl/{global_id}"
 API_SIMILAR = "https://local-listings.funda.io/api/v1/similarlistings"
 API_MARKET_INSIGHTS = "https://marketinsights.funda.io/v2/localinsights/preview/{city}/{neighbourhood}"
+API_BROKER_INFO = "https://brokerpresentation-office-pages-bff.funda.io/api/v3.0/office-page/Wonen/{broker_id}/nl"
+API_BROKER_LISTINGS = "https://brokerpresentation-office-pages-bff.funda.io/api/v3.0/office-page/Wonen/{broker_id}/nl/listings"
+API_BROKER_REVIEWS = "https://reviews-office-pages-bff.funda.io/api/v1/office-page/{broker_id}/reviews/nl"
 API_WALTER = "https://api.walterliving.com/hunter/lookup"
 
 # Funda mobile app JA3 fingerprints (captured from real Dart/Flutter app traffic)
@@ -1037,6 +1040,117 @@ class Funda:
             "avg_asking_price_per_m2": data.get("averageAskingPricePerM2"),
         }
 
+    def _resolve_broker_id(self, broker: "Listing | int | str") -> int:
+        """Resolve a broker reference (Listing, int, or numeric str) to an id.
+
+        The broker id (Funda calls it ``officeId``, internally ``broker_id``
+        on Listing objects) is shared across the broker-page endpoints.
+        """
+        if isinstance(broker, Listing):
+            bid = broker.get("broker_id")
+            if not bid:
+                raise ValueError("Listing has no broker_id")
+            return int(bid)
+        id_str = str(broker)
+        if not id_str.isdigit():
+            raise ValueError(f"Unrecognized broker identifier: {broker!r}")
+        return int(id_str)
+
+    def get_broker_info(self, broker: "Listing | int | str") -> dict:
+        """Get a broker/agency profile page (phone, email, website, etc).
+
+        Args:
+            broker: A Listing object (uses its ``broker_id``) or a numeric
+                broker id (also called ``officeId`` in the Funda app).
+
+        Returns:
+            Dict with the agency's display name, phone, email, website,
+            postal address, affiliation (NVM/VBO/…), description (HTML),
+            certificates, languages, services, and logo image URL set.
+
+        Raises:
+            LookupError: Unknown broker id (HTTP 204) or non-200.
+
+        Example:
+            >>> info = f.get_broker_info(24716)
+            >>> info['name'], info['phone'], info['email']
+            ('Simone Dijkman Makelaardij', '075 7725155', 'info@simonedijkman.nl')
+        """
+        broker_id = self._resolve_broker_id(broker)
+        url = API_BROKER_INFO.format(broker_id=broker_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(f"Broker {broker_id} not found")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch broker info (status {response.status_code})"
+            )
+
+        return self._parse_broker_info(response.json())
+
+    def get_broker_listings(self, broker: "Listing | int | str") -> list[dict]:
+        """Get every listing handled by a broker (sold, for-sale, purchased).
+
+        Returns a flat list of listing entries with a ``status`` field
+        ("sold", "for_sale", or "purchased"). Each entry includes price,
+        address, lat/lng, image, dates, and the ``tiny_id`` parsed from the
+        detail URL.
+
+        Returns:
+            List of dicts, one per listing, sorted as the API returns them.
+
+        Example:
+            >>> listings = f.get_broker_listings(24716)
+            >>> sold = [l for l in listings if l['status'] == 'sold']
+            >>> len(sold), sold[0]['title'], sold[0]['transaction_date']
+        """
+        broker_id = self._resolve_broker_id(broker)
+        url = API_BROKER_LISTINGS.format(broker_id=broker_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(f"Broker {broker_id} has no listings")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch broker listings (status {response.status_code})"
+            )
+
+        return self._parse_broker_listings(response.json())
+
+    def get_broker_reviews(self, broker: "Listing | int | str") -> dict:
+        """Get customer reviews and aggregate scores for a broker.
+
+        Note that the API only returns a small sample of recent reviews,
+        not the full set — ``number_of_reviews`` reflects the total, while
+        ``reviews`` is a representative slice.
+
+        Returns:
+            Dict with aggregate ``average`` (float), ``number_of_reviews``,
+            ``selectivity_percentage``, a ``highlight`` review, and a list
+            of ``reviews`` (each with subscores, transaction_type, text).
+
+        Example:
+            >>> r = f.get_broker_reviews(24716)
+            >>> r['average'], r['number_of_reviews']
+            (9.3, 26)
+        """
+        broker_id = self._resolve_broker_id(broker)
+        url = API_BROKER_REVIEWS.format(broker_id=broker_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(f"Broker {broker_id} has no reviews")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch broker reviews (status {response.status_code})"
+            )
+
+        return self._parse_broker_reviews(response.json())
+
     def _parse_contact_info(self, data: dict) -> dict:
         """Normalize the contact-block payload into a flat dict."""
         brokers = [
@@ -1131,6 +1245,115 @@ class Funda:
             listing_id=ids.get("tinyId") or ids.get("globalId"),
             data=listing_data,
         )
+
+    def _parse_broker_info(self, data: dict) -> dict:
+        """Normalize the broker office-page payload."""
+        office = data.get("officeId", {}) or {}
+        desc = data.get("description", {}) or {}
+        contact = data.get("contactDetails", {}) or {}
+        addr = contact.get("address", {}) or {}
+        media = data.get("mediaReferences", {}) or {}
+        chars = data.get("characteristics", {}) or {}
+
+        return {
+            "broker_id": office.get("officeNumber"),
+            "uuid": office.get("id"),
+            "name": data.get("displayName"),
+            "affiliation": data.get("affiliation"),
+            "slogan": desc.get("slogan"),
+            "description": desc.get("description"),
+            "short_description": desc.get("shortDescription"),
+            "email": contact.get("email"),
+            "website": contact.get("websiteUrl"),
+            "phone": contact.get("phoneNumber"),
+            "address": {
+                "street": addr.get("street"),
+                "number": addr.get("number"),
+                "addition": addr.get("addition"),
+                "postcode": addr.get("postcode"),
+                "city": addr.get("location"),
+            },
+            "logo_urls": media.get("logoImages") or None,
+            "languages": chars.get("languages", []),
+            "services": chars.get("services", []),
+            "certificates": chars.get("certificates", []),
+        }
+
+    def _parse_broker_listings(self, data: dict) -> list[dict]:
+        """Flatten the broker-listings payload into a list tagged by status."""
+        status_map = {
+            "Sold": "sold",
+            "ForSale": "for_sale",
+            "Purchased": "purchased",
+        }
+        tiny_re = re.compile(r"/detail/(\d+)/?")
+
+        out = []
+        for group in data.get("offering", []) or []:
+            api_status = group.get("type")
+            status = status_map.get(api_status, api_status.lower() if api_status else None)
+            for item in group.get("listings", []) or []:
+                loc = item.get("location", {}) or {}
+                addr = loc.get("address", {}) or {}
+                detail_url = item.get("detailUrl") or ""
+                tiny_match = tiny_re.search(detail_url)
+                street = addr.get("street") or ""
+                number = addr.get("number") or ""
+                addition = addr.get("addition") or ""
+                title = f"{street} {number}".strip()
+                if addition:
+                    title = f"{title}-{addition}" if number else f"{title} {addition}".strip()
+                out.append({
+                    "status": status,
+                    "listing_id": item.get("listingId"),
+                    "tiny_id": tiny_match.group(1) if tiny_match else None,
+                    "title": title or None,
+                    "street": addr.get("street"),
+                    "house_number": addr.get("number"),
+                    "house_number_ext": addr.get("addition") or None,
+                    "postcode": addr.get("postcode"),
+                    "city": addr.get("city"),
+                    "latitude": loc.get("latitude"),
+                    "longitude": loc.get("longitude"),
+                    "price": item.get("price"),
+                    "price_formatted": item.get("formattedPrice"),
+                    "price_type": item.get("priceType"),
+                    "price_condition": item.get("priceCondition"),
+                    "publication_date": item.get("publicationDate"),
+                    "transaction_date": item.get("transactionDate"),
+                    "image_url": item.get("image"),
+                    "detail_url": (
+                        f"https://www.funda.nl{detail_url}" if detail_url.startswith("/") else detail_url
+                    ) or None,
+                })
+        return out
+
+    def _parse_broker_reviews(self, data: dict) -> dict:
+        """Normalize the broker reviews payload."""
+        scores = data.get("scores", {}) or {}
+
+        def _flatten(review: dict | None) -> dict | None:
+            if not review:
+                return None
+            score = review.get("score", {}) or {}
+            return {
+                "date": review.get("postedDate"),
+                "transaction_type": review.get("transactionType"),
+                "text": review.get("text"),
+                "average": score.get("average"),
+                "expertise": score.get("expertise"),
+                "local_market_knowledge": score.get("localMarketKnowledge"),
+                "price_and_quality": score.get("priceAndQuality"),
+                "service_and_guidance": score.get("serviceAndGuidance"),
+            }
+
+        return {
+            "average": scores.get("average"),
+            "number_of_reviews": scores.get("numberOfReviews"),
+            "selectivity_percentage": scores.get("selectivityPercentage"),
+            "highlight": _flatten(data.get("highlightedReview")),
+            "reviews": [_flatten(r) for r in data.get("reviews", []) or []],
+        }
 
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""

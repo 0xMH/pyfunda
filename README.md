@@ -362,6 +362,46 @@ mi = f.get_market_insights(listing)
 
 **Returns:** Dict with `city`, `neighbourhood`, `inhabitants`, `families_with_children_pct`, `avg_asking_price_per_m2`. Raises `LookupError` for unknown neighbourhoods (HTTP 204).
 
+#### get_broker_info(broker)
+
+Get the agency's profile page: phone, email, website, postal address, affiliation (NVM/VBO/…), description, certificates, languages, services. Accepts a numeric `broker_id` or a `Listing` (uses its `broker_id` automatically).
+
+```python
+info = f.get_broker_info(24716)
+print(info['name'], info['phone'], info['email'])
+# Simone Dijkman Makelaardij 075 7725155 info@simonedijkman.nl
+
+# Or chain from a listing
+listing = f.get_listing(43333315)
+info = f.get_broker_info(listing)
+```
+
+#### get_broker_listings(broker)
+
+Every listing the agency has handled, tagged by status. Useful for analyzing an agency's deal history (sold dates, prices, neighbourhoods).
+
+```python
+listings = f.get_broker_listings(24716)
+sold = [l for l in listings if l['status'] == 'sold']
+for_sale = [l for l in listings if l['status'] == 'for_sale']
+print(f"{len(sold)} sold, {len(for_sale)} active")
+```
+
+**Returns:** Flat list of dicts. Each entry has `status` (`sold`, `for_sale`, `purchased`), `listing_id`, `tiny_id`, `title`, `street`, `house_number`, `postcode`, `city`, `latitude`, `longitude`, `price`, `price_formatted`, `price_condition`, `publication_date`, `transaction_date`, `image_url`, `detail_url`.
+
+#### get_broker_reviews(broker)
+
+Customer reviews and aggregate scores per agency. The API returns only a representative sample of recent reviews — `number_of_reviews` is the true total.
+
+```python
+r = f.get_broker_reviews(24716)
+print(f"{r['average']}/10 over {r['number_of_reviews']} reviews")
+for review in r['reviews']:
+    print(review['date'], review['average'], review['text'][:60])
+```
+
+**Returns:** Dict with `average` (float), `number_of_reviews`, `selectivity_percentage`, a single `highlight` review, and a `reviews` list. Each review has subscores (`expertise`, `local_market_knowledge`, `price_and_quality`, `service_and_guidance`, `average`), `transaction_type`, `text`, and `date`.
+
 ### Listing
 
 Listing objects support dict-like access with convenient aliases.

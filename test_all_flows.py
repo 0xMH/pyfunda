@@ -926,6 +926,85 @@ def test_get_market_insights_not_found():
 
 
 # =============================================================================
+# FLOW 23: Broker Profile, Listings, and Reviews
+# =============================================================================
+
+@test("Get broker info by id")
+def test_get_broker_info():
+    from funda import Funda
+    f = Funda()
+    info = f.get_broker_info(24716)
+
+    assert info['name'], "Should have agency name"
+    assert info['phone'], "Should have phone"
+    assert info['email'], "Should have email"
+    assert info['affiliation'], "Should have affiliation"
+    assert isinstance(info['address'], dict) and info['address']['city'], "Should have address"
+    assert isinstance(info['languages'], list)
+    assert isinstance(info['services'], list)
+    assert isinstance(info['certificates'], list)
+    print(f"  {info['name']} | {info['phone']} | {info['email']} ({info['affiliation']})")
+
+
+@test("Get broker info via Listing object")
+def test_get_broker_info_via_listing():
+    from funda import Funda
+    f = Funda()
+    listing = f.get_listing(43333315)
+    info = f.get_broker_info(listing)
+
+    assert info['broker_id'] == listing.get('broker_id'), "broker_id should round-trip"
+    assert info['name'], "Should have agency name"
+
+
+@test("Get broker info raises LookupError for unknown id")
+def test_get_broker_info_not_found():
+    from funda import Funda
+    f = Funda()
+
+    try:
+        f.get_broker_info(99999999)
+        assert False, "Should have raised LookupError"
+    except LookupError as e:
+        print(f"  Correctly raised: {e}")
+
+
+@test("Get broker listings returns flat tagged list")
+def test_get_broker_listings():
+    from funda import Funda
+    f = Funda()
+    listings = f.get_broker_listings(24716)
+
+    assert isinstance(listings, list) and listings, "Should be non-empty list"
+    statuses = {l['status'] for l in listings}
+    assert statuses, "Should have at least one status"
+    assert all(l.get('listing_id') for l in listings), "All entries should have listing_id"
+    sold = [l for l in listings if l['status'] == 'sold']
+    if sold:
+        s = sold[0]
+        assert s['transaction_date'], "Sold listings should have transaction_date"
+        assert s['tiny_id'], "Should parse tiny_id from detailUrl"
+        assert s['detail_url'].startswith('https://www.funda.nl/'), "Should have absolute URL"
+    print(f"  {len(listings)} listings | statuses={statuses}")
+
+
+@test("Get broker reviews returns aggregate scores and review list")
+def test_get_broker_reviews():
+    from funda import Funda
+    f = Funda()
+    r = f.get_broker_reviews(24716)
+
+    assert isinstance(r['average'], (int, float)), "Should have numeric average"
+    assert isinstance(r['number_of_reviews'], int) and r['number_of_reviews'] >= 1
+    assert isinstance(r['reviews'], list)
+    if r['reviews']:
+        first = r['reviews'][0]
+        for k in ['average', 'expertise', 'local_market_knowledge', 'price_and_quality', 'service_and_guidance']:
+            assert k in first, f"Review should have {k}"
+    print(f"  avg={r['average']} | n={r['number_of_reviews']} | selectivity={r['selectivity_percentage']}%")
+
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 
@@ -1039,6 +1118,13 @@ def run_all_tests():
         test_get_market_insights_by_strings,
         test_get_market_insights_from_listing,
         test_get_market_insights_not_found,
+
+        # Flow 23: Broker profile, listings, reviews
+        test_get_broker_info,
+        test_get_broker_info_via_listing,
+        test_get_broker_info_not_found,
+        test_get_broker_listings,
+        test_get_broker_reviews,
     ]
 
     start_time = time.time()
