@@ -17,6 +17,10 @@ API_LISTING = f"{API_BASE}/{{listing_id}}"
 API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
 API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
 API_CONTACTS = "https://contacts-flows-bff.funda.io/api/v1/contacts-flows/listings/{listing_id}/contact-block"
+API_CONTACT_FORM = "https://contacts-bff.funda.io/api/v4/contact/listings/{listing_id}/contact-form"
+API_LISTING_SUMMARY = "https://listing-detail-summary.funda.io/api/v1/listing/nl/{global_id}"
+API_SIMILAR = "https://local-listings.funda.io/api/v1/similarlistings"
+API_MARKET_INSIGHTS = "https://marketinsights.funda.io/v2/localinsights/preview/{city}/{neighbourhood}"
 API_WALTER = "https://api.walterliving.com/hunter/lookup"
 
 # Funda mobile app JA3 fingerprints (captured from real Dart/Flutter app traffic)
@@ -793,6 +797,35 @@ class Funda:
 
         return changes
 
+    def _resolve_global_id(self, listing: "Listing | int | str") -> int:
+        """Resolve any listing identifier to a numeric globalId.
+
+        Funda has two id systems: the 7-digit ``globalId`` used internally by
+        most APIs, and the 8-9 digit ``tinyId`` shown in funda.nl URLs. Many
+        endpoints (contact-block, listing-detail-summary, similarlistings,
+        contact-form) only accept the globalId, so tinyIds and URLs need to
+        be resolved through ``get_listing`` first.
+        """
+        if isinstance(listing, Listing):
+            gid = listing.get("global_id")
+            if not gid:
+                raise ValueError("Listing has no global_id")
+            return int(gid)
+        if isinstance(listing, str) and "funda.nl" in listing:
+            gid = self.get_listing(listing).get("global_id")
+            if not gid:
+                raise ValueError("Could not resolve URL to global_id")
+            return int(gid)
+        id_str = str(listing)
+        if not id_str.isdigit():
+            raise ValueError(f"Unrecognized listing identifier: {listing!r}")
+        if len(id_str) >= 8:  # tinyId — needs resolution
+            gid = self.get_listing(int(id_str)).get("global_id")
+            if not gid:
+                raise ValueError(f"Could not resolve tinyId {id_str}")
+            return int(gid)
+        return int(id_str)
+
     def get_contact_info(self, listing: "Listing | int | str") -> dict:
         """Get realtor/makelaar contact info for a listing.
 
@@ -820,27 +853,7 @@ class Funda:
             >>> contact['name'], contact['phone']
             ('Scheffer Makelaardij B.V.', '020-2470322')
         """
-        # Resolve to global_id (the endpoint expects the numeric listingId,
-        # not the tinyId shown in funda.nl URLs).
-        global_id: int | None = None
-        if isinstance(listing, Listing):
-            global_id = listing.get("global_id")
-        elif isinstance(listing, str) and "funda.nl" in listing:
-            global_id = self.get_listing(listing).get("global_id")
-        else:
-            id_str = str(listing)
-            if not id_str.isdigit():
-                raise ValueError(f"Unrecognized listing identifier: {listing!r}")
-            # tinyIds are 8-9 digits; resolve them to a globalId via the
-            # listing detail endpoint. 7-digit ids are already globalIds.
-            if len(id_str) >= 8:
-                global_id = self.get_listing(int(id_str)).get("global_id")
-            else:
-                global_id = int(id_str)
-
-        if not global_id:
-            raise ValueError("Could not determine listing globalId")
-
+        global_id = self._resolve_global_id(listing)
         url = API_CONTACTS.format(listing_id=global_id)
         headers = _make_headers()
         response = self._get(url, headers)
@@ -853,6 +866,176 @@ class Funda:
             )
 
         return self._parse_contact_info(response.json())
+
+    def get_contact_form(self, listing: "Listing | int | str") -> dict:
+        """Get contact-form availability (days and times-of-day) for a listing.
+
+        Companion to ``get_contact_info``. Tells you which weekdays and
+        times-of-day the agency accepts inquiries through the in-app form.
+
+        Returns:
+            Dict with the primary office hoisted to the top level
+            (``office_id``, ``office_name``, ``days``, ``times_of_day``,
+            ``is_contacting_enabled``, ``is_viewing_planner_enabled``) plus
+            the raw ``offices`` list.
+
+        Example:
+            >>> form = f.get_contact_form(43333315)
+            >>> form['days']
+            ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+            >>> form['times_of_day']
+            ['Morning', 'Afternoon']
+        """
+        global_id = self._resolve_global_id(listing)
+        url = API_CONTACT_FORM.format(listing_id=global_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(f"Listing {global_id} has no contact form")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch contact form (status {response.status_code})"
+            )
+
+        data = response.json()
+        if not data:
+            raise LookupError(f"No contact form entries for listing {global_id}")
+
+        primary = data[0]
+        return {
+            "office_id": primary.get("officeId"),
+            "office_name": primary.get("officeName"),
+            "is_contacting_enabled": primary.get("isContactingEnabled"),
+            "is_viewing_planner_enabled": primary.get("isViewingPlannerEnabled"),
+            "days": primary.get("days", []),
+            "times_of_day": primary.get("timesOfDay", []),
+            "offices": data,
+        }
+
+    def get_listing_summary(self, listing: "Listing | int | str") -> Listing:
+        """Get a lightweight summary of a listing.
+
+        Faster and smaller than ``get_listing`` (no descriptions, photos, or
+        kenmerken). Useful for batch enrichment, e.g. fetching a row of
+        ``get_similar_listings`` results.
+
+        Returns:
+            Listing object with summary fields populated.
+
+        Example:
+            >>> summary = f.get_listing_summary(7985628)
+            >>> summary['title'], summary['price'], summary['energy_label']
+            ('Semarangstraat 13', 650000, 'C')
+        """
+        global_id = self._resolve_global_id(listing)
+        url = API_LISTING_SUMMARY.format(global_id=global_id)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 404:
+            raise LookupError(f"Listing summary {global_id} not found")
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch listing summary (status {response.status_code})"
+            )
+
+        return self._parse_listing_summary(response.json())
+
+    def get_similar_listings(self, listing: "Listing | int | str") -> dict:
+        """Get globalIds of similar / recently-sold listings near this one.
+
+        Returns IDs only. Combine with ``get_listing_summary`` or
+        ``get_listing`` to materialize them.
+
+        Returns:
+            Dict with ``recently_listed`` and ``recently_sold``, each a list
+            of integer globalIds.
+
+        Example:
+            >>> sim = f.get_similar_listings(7988952)
+            >>> [f.get_listing_summary(gid)['title'] for gid in sim['recently_sold'][:3]]
+        """
+        global_id = self._resolve_global_id(listing)
+        url = f"{API_SIMILAR}?globalId={global_id}"
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch similar listings (status {response.status_code})"
+            )
+
+        data = response.json()
+        return {
+            "recently_listed": [int(x["globalId"]) for x in data.get("recentlyListed", []) if x.get("globalId")],
+            "recently_sold": [int(x["globalId"]) for x in data.get("recentlySold", []) if x.get("globalId")],
+        }
+
+    def get_market_insights(
+        self,
+        city: "str | Listing",
+        neighbourhood: str | None = None,
+    ) -> dict:
+        """Get neighbourhood demographics and average €/m² for a location.
+
+        Args:
+            city: Either a city name (string) or a Listing object, in which
+                case ``city`` and ``neighbourhood`` are taken from the
+                listing automatically.
+            neighbourhood: Neighbourhood name. Required if ``city`` is a
+                string; ignored if ``city`` is a Listing.
+
+        Returns:
+            Dict with ``city``, ``neighbourhood``, ``inhabitants``,
+            ``families_with_children_pct``, ``avg_asking_price_per_m2``.
+
+        Example:
+            >>> f.get_market_insights('Amsterdam', 'Twiske-West')
+            {'city': 'Amsterdam', 'neighbourhood': 'Twiske-West',
+             'inhabitants': 2510, 'families_with_children_pct': 43.96,
+             'avg_asking_price_per_m2': 5975}
+            >>> # Or pass a Listing directly
+            >>> listing = f.get_listing(43333315)
+            >>> f.get_market_insights(listing)
+        """
+        if isinstance(city, Listing):
+            city_name = city.get("city") or ""
+            nb_name = city.get("neighbourhood") or ""
+            if not city_name or not nb_name:
+                raise ValueError(
+                    "Listing must have city and neighbourhood for market insights"
+                )
+        else:
+            if not neighbourhood:
+                raise ValueError("neighbourhood is required when city is a string")
+            city_name = city
+            nb_name = neighbourhood
+
+        city_slug = city_name.lower().replace(" ", "-")
+        nb_slug = nb_name.lower().replace(" ", "-")
+
+        url = API_MARKET_INSIGHTS.format(city=city_slug, neighbourhood=nb_slug)
+        headers = _make_headers()
+        response = self._get(url, headers)
+
+        if response.status_code == 204:
+            raise LookupError(
+                f"No market insights for {city_slug}/{nb_slug}"
+            )
+        if response.status_code != 200:
+            raise LookupError(
+                f"Could not fetch market insights (status {response.status_code})"
+            )
+
+        data = response.json()
+        return {
+            "city": data.get("city"),
+            "neighbourhood": data.get("neighbourhood"),
+            "inhabitants": data.get("inhabitants"),
+            "families_with_children_pct": data.get("familiesWithChildren"),
+            "avg_asking_price_per_m2": data.get("averageAskingPricePerM2"),
+        }
 
     def _parse_contact_info(self, data: dict) -> dict:
         """Normalize the contact-block payload into a flat dict."""
@@ -894,6 +1077,60 @@ class Funda:
             })
 
         return result
+
+    def _parse_listing_summary(self, data: dict) -> Listing:
+        """Parse the lightweight listing-detail-summary payload."""
+        ids = data.get("identifiers", {})
+        addr = data.get("address", {})
+        fast = data.get("fastView", {})
+        price = data.get("price", {})
+        media = data.get("media", {})
+        brokers = data.get("brokers", []) or []
+        primary_broker = brokers[0] if brokers else {}
+        urls = data.get("urls", {}).get("friendlyUrl", {})
+        promo = data.get("promo", {}).get("blikvanger", {}) or {}
+        tracking = data.get("tracking", {}).get("values", {}) or {}
+
+        photo_base = media.get("thumbnailBaseUrl", "") or ""
+        photo_id = media.get("id")
+        thumbnail_url = None
+        if photo_base and photo_id:
+            thumbnail_url = photo_base.replace("{id}", str(photo_id)).replace(
+                "{size}", "720x480"
+            )
+
+        listing_data = {
+            "global_id": ids.get("globalId"),
+            "tiny_id": ids.get("tinyId"),
+            "title": addr.get("title"),
+            "subtitle": addr.get("subTitle"),
+            "city": addr.get("city"),
+            "postcode": addr.get("postCode"),
+            "price_formatted": price.get("sellingPrice") or price.get("rentalPrice"),
+            "price": tracking.get("listing_askingprice"),
+            "living_area_formatted": fast.get("livingArea"),
+            "living_area": _parse_area(fast.get("livingArea")),
+            "plot_area_formatted": fast.get("plotArea"),
+            "plot_area": _parse_area(fast.get("plotArea")),
+            "bedrooms": fast.get("numberOfBedrooms"),
+            "energy_label": fast.get("energyLabel"),
+            "object_type": tracking.get("listing_type"),
+            "offering_type": tracking.get("listing_offering_type"),
+            "status": tracking.get("listing_status"),
+            "is_sold_or_rented": data.get("isSoldOrRented"),
+            "publication_date": data.get("publicationDate"),
+            "highlight": promo.get("text"),
+            "broker_id": primary_broker.get("officeId"),
+            "broker_name": primary_broker.get("name"),
+            "url": urls.get("fullUrl"),
+            "share_url": data.get("share", {}).get("url"),
+            "thumbnail_url": thumbnail_url,
+        }
+
+        return Listing(
+            listing_id=ids.get("tinyId") or ids.get("globalId"),
+            data=listing_data,
+        )
 
     def _parse_search_results(self, data: dict) -> list[Listing]:
         """Parse search API response into list of Listings."""

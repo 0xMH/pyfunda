@@ -812,6 +812,120 @@ def test_get_contact_info_not_found():
 
 
 # =============================================================================
+# FLOW 19: Contact Form Availability
+# =============================================================================
+
+@test("Get contact form returns days and times of day")
+def test_get_contact_form():
+    from funda import Funda
+    f = Funda()
+    form = f.get_contact_form(7988952)
+
+    assert form['office_name'], "Should have office name"
+    assert form['office_id'], "Should have office id"
+    assert isinstance(form['days'], list) and form['days'], "Should have days list"
+    assert isinstance(form['times_of_day'], list) and form['times_of_day'], "Should have times_of_day"
+    assert isinstance(form['offices'], list) and form['offices'], "Should expose raw offices list"
+    print(f"  {form['office_name']} | days={form['days']} | times={form['times_of_day']}")
+
+
+# =============================================================================
+# FLOW 20: Lightweight Listing Summary
+# =============================================================================
+
+@test("Get listing summary by globalId")
+def test_get_listing_summary_by_global_id():
+    from funda import Funda, Listing
+    f = Funda()
+    summary = f.get_listing_summary(7985628)
+
+    assert isinstance(summary, Listing), "Should return Listing instance"
+    assert summary['title'], "Should have title"
+    assert summary['price'], "Should have numeric price"
+    assert summary['energy_label'], "Should have energy_label"
+    assert summary['url'].startswith("https://www.funda.nl/"), "Should have full URL"
+    assert summary['broker_name'], "Should have broker_name"
+    print(f"  {summary['title']} | €{summary['price']} | label {summary['energy_label']}")
+
+
+@test("Get listing summary resolves tinyId via get_listing")
+def test_get_listing_summary_by_tiny_id():
+    from funda import Funda
+    f = Funda()
+    summary = f.get_listing_summary(43333315)
+
+    assert summary['global_id'] == 7988952, "tinyId should resolve to globalId 7988952"
+
+
+@test("Get listing summary raises LookupError for unknown id")
+def test_get_listing_summary_not_found():
+    from funda import Funda
+    f = Funda()
+
+    try:
+        f.get_listing_summary(1)
+        assert False, "Should have raised LookupError"
+    except LookupError as e:
+        print(f"  Correctly raised: {e}")
+
+
+# =============================================================================
+# FLOW 21: Similar Listings
+# =============================================================================
+
+@test("Get similar listings returns globalId lists")
+def test_get_similar_listings():
+    from funda import Funda
+    f = Funda()
+    sim = f.get_similar_listings(7988952)
+
+    assert "recently_listed" in sim and "recently_sold" in sim, "Should have both keys"
+    assert all(isinstance(x, int) for x in sim['recently_listed']), "recently_listed should be list of ints"
+    assert all(isinstance(x, int) for x in sim['recently_sold']), "recently_sold should be list of ints"
+    print(f"  listed={sim['recently_listed']} sold={sim['recently_sold']}")
+
+
+# =============================================================================
+# FLOW 22: Local Market Insights
+# =============================================================================
+
+@test("Get market insights by city and neighbourhood")
+def test_get_market_insights_by_strings():
+    from funda import Funda
+    f = Funda()
+    mi = f.get_market_insights('Amsterdam', 'Twiske-West')
+
+    assert mi['city'] == 'Amsterdam', "city should round-trip"
+    assert mi['neighbourhood'] == 'Twiske-West', "neighbourhood should round-trip"
+    assert isinstance(mi['inhabitants'], int) and mi['inhabitants'] > 0
+    assert isinstance(mi['avg_asking_price_per_m2'], (int, float)) and mi['avg_asking_price_per_m2'] > 0
+    print(f"  {mi['city']}/{mi['neighbourhood']}: {mi['inhabitants']} inhab, €{mi['avg_asking_price_per_m2']}/m²")
+
+
+@test("Get market insights from a Listing object")
+def test_get_market_insights_from_listing():
+    from funda import Funda
+    f = Funda()
+    listing = f.get_listing(43333315)
+    mi = f.get_market_insights(listing)
+
+    assert mi['city'], "Should have city"
+    assert mi['neighbourhood'], "Should have neighbourhood"
+
+
+@test("Get market insights raises LookupError for unknown neighbourhood")
+def test_get_market_insights_not_found():
+    from funda import Funda
+    f = Funda()
+
+    try:
+        f.get_market_insights('Amsterdam', 'Nope-Nope-Nope')
+        assert False, "Should have raised LookupError"
+    except LookupError as e:
+        print(f"  Correctly raised: {e}")
+
+
+# =============================================================================
 # Run all tests
 # =============================================================================
 
@@ -909,6 +1023,22 @@ def run_all_tests():
         test_get_contact_info_by_listing,
         test_get_contact_info_by_tiny_id,
         test_get_contact_info_not_found,
+
+        # Flow 19: Contact Form Availability
+        test_get_contact_form,
+
+        # Flow 20: Lightweight Listing Summary
+        test_get_listing_summary_by_global_id,
+        test_get_listing_summary_by_tiny_id,
+        test_get_listing_summary_not_found,
+
+        # Flow 21: Similar Listings
+        test_get_similar_listings,
+
+        # Flow 22: Local Market Insights
+        test_get_market_insights_by_strings,
+        test_get_market_insights_from_listing,
+        test_get_market_insights_not_found,
     ]
 
     start_time = time.time()

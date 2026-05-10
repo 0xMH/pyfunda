@@ -309,6 +309,59 @@ print(contact['name'], contact['phone'])
 
 Raises `LookupError` if the listing has no contact info exposed.
 
+#### get_contact_form(listing)
+
+Get the agency's contact-form availability (which weekdays and times-of-day they accept inquiries through the in-app form).
+
+```python
+form = f.get_contact_form(43333315)
+print(form['days'], form['times_of_day'])
+# ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] ['Morning', 'Afternoon']
+```
+
+**Returns:** Dict with `office_id`, `office_name`, `days`, `times_of_day`, `is_contacting_enabled`, `is_viewing_planner_enabled`, plus the raw `offices` list.
+
+#### get_listing_summary(listing)
+
+Lightweight version of `get_listing` (no descriptions, photos, kenmerken). Faster and smaller, useful for batch enrichment.
+
+```python
+summary = f.get_listing_summary(7985628)
+print(summary['title'], summary['price'], summary['energy_label'])
+# Semarangstraat 13 650000 C
+```
+
+**Returns:** A `Listing` object with summary fields (`title`, `price`, `living_area`, `plot_area`, `bedrooms`, `energy_label`, `broker_name`, `url`, `thumbnail_url`, …).
+
+#### get_similar_listings(listing)
+
+Get globalIds of similar / recently-sold listings near a given listing. Returns IDs only; combine with `get_listing_summary` or `get_listing` to materialize them.
+
+```python
+sim = f.get_similar_listings(7988952)
+for gid in sim['recently_sold']:
+    print(f.get_listing_summary(gid)['title'])
+```
+
+**Returns:** Dict with `recently_listed` and `recently_sold`, each a list of integer globalIds.
+
+#### get_market_insights(city, neighbourhood)
+
+Neighbourhood demographics and average asking €/m² for a (city, neighbourhood) pair. Accepts a `Listing` directly to use its city/neighbourhood automatically.
+
+```python
+mi = f.get_market_insights('Amsterdam', 'Twiske-West')
+# {'city': 'Amsterdam', 'neighbourhood': 'Twiske-West',
+#  'inhabitants': 2510, 'families_with_children_pct': 43.96,
+#  'avg_asking_price_per_m2': 5975}
+
+# Or pass a Listing
+listing = f.get_listing(43333315)
+mi = f.get_market_insights(listing)
+```
+
+**Returns:** Dict with `city`, `neighbourhood`, `inhabitants`, `families_with_children_pct`, `avg_asking_price_per_m2`. Raises `LookupError` for unknown neighbourhoods (HTTP 204).
+
 ### Listing
 
 Listing objects support dict-like access with convenient aliases.
