@@ -1,138 +1,374 @@
-"""Listing class - represents a Funda property listing."""
+"""Typed value objects returned by the public Funda client."""
 
-from typing import Any
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal
 
 
-class Listing:
-    """A Funda property listing.
+ListingSource = Literal["detail", "search", "summary"]
+JsonDict = dict[str, Any]
 
-    Data can be accessed as listing['key'] or listing.get('key').
 
-    Example:
-        >>> listing = funda.get_listing(43117443)
-        >>> listing['title']
-        'Reehorst 13'
-        >>> listing['price']
-        695000
-        >>> listing['city']
-        'Luttenberg'
-    """
+class DictValue:
+    """Small mixin for exporting nested dataclasses."""
 
-    default_info = ('main',)
+    def to_dict(self, *, include_raw: bool = False) -> JsonDict:
+        data = asdict(self)
+        if not include_raw:
+            _drop_raw(data)
+        return data
 
-    keys_alias = {
-        'name': 'title',
-        'address': 'title',
-        'location': 'city',
-        'locality': 'city',
-        'area': 'living_area',
-        'size': 'living_area',
-        'coords': 'coordinates',
-        'lat': 'latitude',
-        'lng': 'longitude',
-        'lon': 'longitude',
-        'zip': 'postcode',
-        'zipcode': 'postcode',
-        'postal_code': 'postcode',
-        'type': 'object_type',
-        'property_type': 'object_type',
-        'images': 'photos',
-        'pictures': 'photos',
-        'media': 'photos',
-        'desc': 'description',
-        'text': 'description',
-        'agent': 'broker',
-        'realtor': 'broker',
-        'makelaar': 'broker',
-    }
 
-    def __init__(self, listing_id: str | int | None = None, data: dict | None = None):
-        self.listing_id = str(listing_id) if listing_id else None
-        self.data: dict[str, Any] = data or {}
-        self.current_info: list[str] = []
+@dataclass(frozen=True, slots=True)
+class Address(DictValue):
+    title: str | None = None
+    subtitle: str | None = None
+    street_name: str | None = None
+    house_number: str | None = None
+    house_number_suffix: str | None = None
+    postcode: str | None = None
+    city: str | None = None
+    municipality: str | None = None
+    neighbourhood: str | None = None
+    neighbourhood_identifier: str | None = None
+    province: str | None = None
+    country: str | None = None
+    is_international: bool | None = None
+    is_bag_address: bool | None = None
+    identifiers: tuple[str, ...] = ()
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class GeoLocation(DictValue):
+    latitude: float | None = None
+    longitude: float | None = None
+    google_maps_url: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def coordinates(self) -> tuple[float, float] | None:
+        if self.latitude is None or self.longitude is None:
+            return None
+        return self.latitude, self.longitude
+
+
+@dataclass(frozen=True, slots=True)
+class Urls(DictValue):
+    full: str | None = None
+    path: str | None = None
+    share: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Price(DictValue):
+    amount: int | None = None
+    formatted: str | None = None
+    offering_type: str | None = None
+    condition: str | None = None
+    price_type: str | None = None
+    range_min: int | None = None
+    range_max: int | None = None
+    is_auction: bool = False
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Areas(DictValue):
+    living: int | None = None
+    plot: int | None = None
+    other_indoor: int | None = None
+    building_bound_outdoor: int | None = None
+    external_storage: int | None = None
+    volume: int | None = None
+    living_formatted: str | None = None
+    plot_formatted: str | None = None
+    living_range_min: int | None = None
+    living_range_max: int | None = None
+    plot_range_min: int | None = None
+    plot_range_max: int | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Rooms(DictValue):
+    total: int | None = None
+    bedrooms: int | None = None
+    bathrooms_description: str | None = None
+    floors_description: str | None = None
+    located_on: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PropertyDetails(DictValue):
+    object_type: str | None = None
+    construction_type: str | None = None
+    construction_year: int | None = None
+    building_type: str | None = None
+    house_type: str | None = None
+    energy_label: str | None = None
+    status: str | None = None
+    raw_object_type: str | None = None
+    raw_construction_type: str | None = None
+    raw_offering_type: str | None = None
+    raw_status: str | None = None
+    features: JsonDict = field(default_factory=dict)
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Broker(DictValue):
+    id: str | None = None
+    office_id: str | None = None
+    name: str | None = None
+    association: str | None = None
+    relative_url: str | None = None
+    logo_id: str | None = None
+    is_primary: bool | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class MediaItem(DictValue):
+    id: str | None = None
+    display_name: str | None = None
+    url: str | None = None
+    thumbnail_url: str | None = None
+    embed_url: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Media(DictValue):
+    photos: tuple[MediaItem, ...] = ()
+    floorplans: tuple[MediaItem, ...] = ()
+    photos_360: tuple[MediaItem, ...] = ()
+    videos: tuple[MediaItem, ...] = ()
+    virtual_tours: tuple[MediaItem, ...] = ()
+    brochure_url: str | None = None
+    layout: JsonDict = field(default_factory=dict)
+    available_types: tuple[str, ...] = ()
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def photo_count(self) -> int:
+        return len(self.photos)
+
+    @property
+    def photo_ids(self) -> tuple[str, ...]:
+        return tuple(item.id for item in self.photos if item.id)
+
+    @property
+    def photo_urls(self) -> tuple[str, ...]:
+        return tuple(item.url for item in self.photos if item.url)
+
+
+@dataclass(frozen=True, slots=True)
+class Label(DictValue):
+    text: str | None = None
+    type: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Characteristic(DictValue):
+    section: str | None = None
+    id: str | None = None
+    label: str | None = None
+    value: Any = None
+    label_style: str | None = None
+    children: tuple["Characteristic", ...] = ()
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CharacteristicSection(DictValue):
+    title: str | None = None
+    items: tuple[Characteristic, ...] = ()
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+    def get(self, label: str, default: Any = None) -> Any:
+        needle = label.casefold()
+        for item in _walk_characteristics(self.items):
+            if item.label and item.label.casefold() == needle:
+                return item.value
+        return default
+
+
+@dataclass(frozen=True, slots=True)
+class SalesHistory(DictValue):
+    title: str | None = None
+    rows: tuple[Characteristic, ...] = ()
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def summary(self) -> JsonDict:
+        return {row.label: row.value for row in self.rows if row.label}
+
+    @property
+    def sale_date(self) -> Any:
+        return self.summary.get("Verkoopdatum")
+
+    @property
+    def time_on_market(self) -> Any:
+        return self.summary.get("Looptijd")
+
+
+@dataclass(frozen=True, slots=True)
+class Project(DictValue):
+    global_id: int | None = None
+    tiny_id: str | None = None
+    title: str | None = None
+    city: str | None = None
+    type: str | None = None
+    status: str | None = None
+    url: str | None = None
+    price: Price | None = None
+    address: Address | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Insights(DictValue):
+    views: int | None = None
+    saves: int | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class Listing(DictValue):
+    listing_id: str | None = None
+    source: ListingSource = "detail"
+    global_id: int | None = None
+    tiny_id: str | None = None
+    offering_type: str | None = None
+    address: Address = field(default_factory=Address)
+    price: Price = field(default_factory=Price)
+    areas: Areas = field(default_factory=Areas)
+    rooms: Rooms = field(default_factory=Rooms)
+    property_details: PropertyDetails = field(default_factory=PropertyDetails)
+    location: GeoLocation = field(default_factory=GeoLocation)
+    urls: Urls = field(default_factory=Urls)
+    media: Media = field(default_factory=Media)
+    brokers: tuple[Broker, ...] = ()
+    labels: tuple[Label, ...] = ()
+    description: str | None = None
+    description_title: str | None = None
+    highlight: str | None = None
+    publication_date: str | None = None
+    characteristics: tuple[CharacteristicSection, ...] = ()
+    sales_history: SalesHistory | None = None
+    parent_project: Project | None = None
+    insights: Insights | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
 
     def __repr__(self) -> str:
-        title = self.data.get('title', 'Unknown')
-        city = self.data.get('city', '')
-        return f"<Listing id:{self.listing_id} [{title}, {city}]>"
-
-    def __str__(self) -> str:
-        return self.__repr__()
-
-    def __contains__(self, key: str) -> bool:
-        return self._normalize_key(key) in self.data
-
-    def __getitem__(self, key: str) -> Any:
-        normalized = self._normalize_key(key)
-        if normalized not in self.data:
-            raise KeyError(key)
-        return self.data[normalized]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.data[self._normalize_key(key)] = value
-
-    def __bool__(self) -> bool:
-        return bool(self.listing_id or self.data.get('title'))
-
-    def _normalize_key(self, key: str) -> str:
-        """Normalize key using aliases."""
-        key = key.lower().replace('-', '_').replace(' ', '_')
-        return self.keys_alias.get(key, key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get a value with optional default."""
-        try:
-            return self[key]
-        except KeyError:
-            return default
-
-    def keys(self) -> list[str]:
-        """Return all available keys."""
-        return list(self.data.keys())
-
-    def items(self) -> list[tuple[str, Any]]:
-        """Return all key-value pairs."""
-        return list(self.data.items())
-
-    def values(self) -> list[Any]:
-        """Return all values."""
-        return list(self.data.values())
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return data as a plain dictionary."""
-        return self.data.copy()
-
-    def summary(self) -> str:
-        """Return a text summary of the listing."""
-        lines = []
-        title = self.data.get('title', 'Unknown')
-        city = self.data.get('city', '')
-        lines.append(f"Listing: {title}, {city}")
-
-        if price := self.data.get('price_formatted'):
-            lines.append(f"Price: {price}")
-        elif price := self.data.get('price'):
-            lines.append(f"Price: €{price:,}")
-
-        if area := self.data.get('living_area'):
-            lines.append(f"Living area: {area}")
-
-        if bedrooms := self.data.get('bedrooms'):
-            lines.append(f"Bedrooms: {bedrooms}")
-
-        if energy := self.data.get('energy_label'):
-            lines.append(f"Energy label: {energy}")
-
-        if url := self.data.get('url'):
-            lines.append(f"URL: {url}")
-
-        return '\n'.join(lines)
-
-    def getID(self) -> str | None:
-        """Return the listing ID."""
-        return self.listing_id
+        return f"Listing(id={self.id!r}, title={self.title!r}, city={self.city!r})"
 
     @property
     def id(self) -> str | None:
-        """Alias for listing_id."""
+        if self.tiny_id is not None:
+            return self.tiny_id
+        if self.global_id is not None:
+            return str(self.global_id)
         return self.listing_id
+
+    @property
+    def title(self) -> str | None:
+        return self.address.title
+
+    @property
+    def city(self) -> str | None:
+        return self.address.city
+
+    @property
+    def postcode(self) -> str | None:
+        return self.address.postcode
+
+    @property
+    def url(self) -> str | None:
+        return self.urls.full
+
+    @property
+    def detail_url(self) -> str | None:
+        return self.urls.path
+
+    @property
+    def broker(self) -> Broker | None:
+        return self.brokers[0] if self.brokers else None
+
+    @property
+    def living_area(self) -> int | None:
+        return self.areas.living
+
+    @property
+    def plot_area(self) -> int | None:
+        return self.areas.plot
+
+    @property
+    def rooms_count(self) -> int | None:
+        return self.rooms.total
+
+    @property
+    def bedrooms(self) -> int | None:
+        return self.rooms.bedrooms
+
+    @property
+    def energy_label(self) -> str | None:
+        return self.property_details.energy_label
+
+    @property
+    def status(self) -> str | None:
+        return self.property_details.status
+
+    def characteristic(self, label: str, default: Any = None) -> Any:
+        needle = label.casefold()
+        for section in self.characteristics:
+            for item in _walk_characteristics(section.items):
+                if item.label and item.label.casefold() == needle:
+                    return item.value
+        return default
+
+
+@dataclass(frozen=True, slots=True)
+class PriceChange(DictValue):
+    price: int | None = None
+    human_price: str | None = None
+    badge_text: str | None = None
+    source: str | None = None
+    status: str | None = None
+    date: str | None = None
+    timestamp: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PriceHistory(DictValue):
+    status: str | None = None
+    url: str | None = None
+    report_token: str | None = None
+    report_slug: str | None = None
+    report_url: str | None = None
+    changes: tuple[PriceChange, ...] = ()
+    trigger_popup: bool | None = None
+    listing_count: int | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+def _walk_characteristics(items: tuple[Characteristic, ...]):
+    for item in items:
+        yield item
+        yield from _walk_characteristics(item.children)
+
+
+def _drop_raw(value: Any) -> None:
+    if isinstance(value, dict):
+        value.pop("raw", None)
+        for child in value.values():
+            _drop_raw(child)
+    elif isinstance(value, list | tuple):
+        for child in value:
+            _drop_raw(child)

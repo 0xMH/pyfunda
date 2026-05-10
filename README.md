@@ -4,15 +4,15 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/pyfunda)](https://pypi.org/project/pyfunda/)
 [![License](https://img.shields.io/pypi/l/pyfunda)](https://github.com/0xMH/pyfunda/blob/main/LICENSE)
 
-The only working real Python API for Funda ([funda.nl](https://www.funda.nl)) — the Netherlands' largest real estate platform.
+The only working real Python API for Funda ([funda.nl](https://www.funda.nl)) -- the Netherlands' largest real estate platform.
 
-> If you find this useful, consider giving it a star — it helps others discover the project.
+> If you find this useful, consider giving it a star -- it helps others discover the project.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date)](https://star-history.com/#0xMH/pyfunda&Date)
 
 ## Why I'm open-sourcing this?
 
-After pyfunda, I got messages asking why I'd give this away when aggregators will just take it and sell it. They're right, every week there's a new "revolutionary AI-powered housing finder" charging €40/month or a €250 "success fee.". They all pull from the same one or two sources and wrap it in a fancy UI completely built with AI.
+After pyfunda, I got messages asking why I'd give this away when aggregators will just take it and sell it. They're right, every week there's a new "revolutionary AI-powered housing finder" charging EUR40/month or a EUR250 "success fee." They all pull from the same one or two sources and wrap it in a fancy UI completely built with AI.
 
 That's exactly why I'm open-sourcing it.
 
@@ -26,21 +26,22 @@ With pyfunda, I've already done all the heavy lifting for you.
 
 **Because it simply works.**
 
-Funda has no public API. If you want Dutch real estate data programmatically, your options are limited:
+Funda has no public developer API. If you want Dutch real estate data programmatically, your options are limited:
 
 | Library | Approach | Limitations |
 |---------|----------|-------------|
 | [whchien/funda-scraper](https://github.com/whchien/funda-scraper) | HTML scraping | Listing dates blocked since Q4 2023 (requires login). Breaks when Funda changes frontend. |
 | [khpeek/funda-scraper](https://github.com/khpeek/funda-scraper) | Scrapy | Last updated 2016. No longer maintained. |
 | [joostboon/Funda-Scraper](https://github.com/joostboon/Funda-Scraper) | Selenium | Requires manual CAPTCHA solving. Slow browser automation. |
-| **Official API** | — | Only available to registered brokers. Not accessible to developers. |
+| **Official API** | Broker API | Only available to registered brokers. Not accessible to regular developers. |
 
-**pyfunda takes a different approach:** it uses Funda's internal mobile app API, reverse-engineered from the official Android app.
+**pyfunda takes a different approach:** it uses Funda's app-facing JSON APIs instead of scraping browser HTML.
 
 - Pure Python, no browser or Selenium needed
-- No CAPTCHAs or anti-bot blocks
-- 70+ fields including photos, floorplans, coordinates, and listing dates
-- Stable mobile API that doesn't break when the website changes
+- No manual CAPTCHA solving
+- Typed Python objects for listings, prices, media, brokers, coordinates, and history
+- Search, listing detail, enrichment, broker, price-history, polling, and parallel batch workflows
+- Raw Funda payloads are still available when you need fields that pyfunda does not model yet
 
 ## Installation
 
@@ -48,34 +49,36 @@ Funda has no public API. If you want Dutch real estate data programmatically, yo
 pip install pyfunda
 ```
 
+For local development:
+
+```bash
+uv sync
+uv run python -m unittest discover -s tests
+```
+
 ## Quick Start
 
 ```python
 from funda import Funda
 
-f = Funda()
+with Funda() as client:
+    # Get a listing by global id, tiny id, or Funda URL
+    listing = client.listing(43117443)
+    print(listing.title, listing.city, listing.price.amount)
 
-# Get a listing by ID
-listing = f.get_listing(43117443)
-print(listing['title'], listing['city'])
-# Reehorst 13 Luttenberg
-
-# Get a listing by URL
-listing = f.get_listing('https://www.funda.nl/detail/koop/amsterdam/appartement-123/43117443/')
-
-# Search listings
-results = f.search_listing('amsterdam', price_max=500000)
-for r in results:
-    print(r['title'], r['price'])
+    # Search listings
+    results = client.search("amsterdam", max_price=500000)
+    for item in results:
+        print(item.title, item.price.amount, item.url)
 ```
 
 ## How It Works
 
-This library uses Funda's undocumented mobile app API, which provides clean JSON responses unlike the website that embeds data in Nuxt.js/JavaScript bundles.
+This library uses Funda's undocumented app-facing APIs, which provide clean JSON responses unlike the website that embeds data in Nuxt.js/JavaScript bundles.
 
 ### Discovery Process
 
-The API was reverse engineered by intercepting and analyzing HTTPS traffic from the official Funda Android app:
+The original API was reverse engineered by intercepting and analyzing HTTPS traffic from the official Funda Android app:
 
 1. Configured an Android device to route traffic through an intercepting proxy
 2. Used the Funda app normally - browsing listings, searching, opening shared URLs
@@ -85,75 +88,84 @@ The API was reverse engineered by intercepting and analyzing HTTPS traffic from 
 
 ### API Architecture
 
-The mobile app communicates with a separate API at `*.funda.io`:
+The app-facing APIs live across several `*.funda.io` services:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
 | `listing-detail-page.funda.io/api/v4/listing/object/nl/{globalId}` | GET | Fetch listing by internal ID |
 | `listing-detail-page.funda.io/api/v4/listing/object/nl/tinyId/{tinyId}` | GET | Fetch listing by URL ID |
 | `listing-search-wonen.funda.io/_msearch/template` | POST | Search listings |
+| `listing-detail-summary.funda.io/api/v1/listing/nl/{globalId}` | GET | Fetch lightweight listing summary |
+| `contacts-flows-bff.funda.io/.../contact-block` | GET | Fetch realtor contact block |
+| `contacts-bff.funda.io/.../contact-form` | GET | Fetch contact-form availability |
+| `local-listings.funda.io/api/v1/similarlistings` | GET | Fetch similar and recently sold listing IDs |
+| `marketinsights.funda.io/v2/localinsights/preview/...` | GET | Fetch neighbourhood market insights |
+| `brokerpresentation-office-pages-bff.funda.io/.../office-page/...` | GET | Fetch broker profile and listings |
+| `reviews-office-pages-bff.funda.io/.../reviews/nl` | GET | Fetch broker review aggregates |
+| `api.walterliving.com/hunter/lookup` | POST | Fetch price history data |
+
+The request transport, headers, retry profiles, and TLS fingerprint rotation are internal implementation details. Normal users only construct `Funda()` and call the public methods below.
 
 ### ID System
 
 Funda uses two ID systems:
-- **globalId**: Internal numeric ID (7 digits), used in the database
-- **tinyId**: Public-facing ID (8-9 digits), appears in URLs like `funda.nl/detail/koop/amsterdam/.../{tinyId}/`
 
-The `tinyId` endpoint was key - it allows fetching any listing directly from a Funda URL without needing to know the internal ID.
+- **globalId**: Internal numeric ID, used by the listing-detail API
+- **tinyId**: Public-facing ID, appears in URLs like `funda.nl/detail/koop/amsterdam/.../{tinyId}/`
+
+The `tinyId` endpoint allows fetching any listing directly from a Funda URL without first knowing the internal ID.
 
 ### Search API
 
 Search uses Elasticsearch's [Multi Search Template API](https://www.elastic.co/guide/en/elasticsearch/reference/current/multi-search-template.html) with NDJSON format:
 
-```
+```json
 {"index":"listings-wonen-searcher-alias-prod"}
 {"id":"search_result_20250805","params":{...}}
 ```
 
-**Search parameters:**
+Search results are paginated with 15 listings per page.
 
-| Parameter | Description | Example |
-|-----------|-------------|---------|
-| `selected_area` | Location filter | `["amsterdam"]` |
-| `radius_search` | Radius from location | `{"index": "geo-wonen-alias-prod", "id": "1012AB-0", "path": "area_with_radius.10"}` |
-| `offering_type` | Buy or rent | `"buy"` or `"rent"` |
-| `price.selling_price` | Price range (buy) | `{"from": 200000, "to": 500000}` |
-| `price.rent_price` | Price range (rent) | `{"from": 500, "to": 2000}` |
-| `object_type` | Property types | `["house", "apartment"]` |
-| `floor_area` | Living area m² | `{"from": 50, "to": 150}` |
-| `plot_area` | Plot area m² | `{"from": 100, "to": 500}` |
-| `energy_label` | Energy labels | `["A", "A+", "A++"]` |
-| `sort` | Sort order | `{"field": "publish_date_utc", "order": "desc"}` |
-| `page.from` | Pagination offset | `0`, `15`, `30`... |
+**Search parameters pyfunda models:**
 
-Results are paginated with 15 listings per page.
+| pyfunda filter | Funda parameter | Example |
+|----------------|-----------------|---------|
+| `location` | `selected_area` | `["amsterdam"]` |
+| `radius_km` | `radius_search` | `{"id": "1012ab-0", "path": "area_with_radius.10"}` |
+| `category` | `offering_type` / `availability` | `"buy"`, `"rent"`, or `"sold"` |
+| `min_price`, `max_price` | `price.selling_price` or `price.rent_price` | `{"from": 200000, "to": 500000}` |
+| `min_area`, `max_area` | `floor_area` | `{"from": 50, "to": 150}` |
+| `min_plot`, `max_plot` | `plot_area` | `{"from": 100, "to": 500}` |
+| `min_rooms`, `max_rooms` | `rooms` | `{"from": 3}` |
+| `min_bedrooms`, `max_bedrooms` | `bedrooms` | `{"from": 2}` |
+| `object_type` | `object_type` | `["house", "apartment"]` |
+| `energy_label` | `energy_label` | `["A", "A+"]` |
+| `construction_type` | `construction_type` | `"existing"` |
+| `min_construction_year`, `max_construction_year` | `construction_period` | `from_1991_to_2000` |
+| `sort` | `sort` | `{"field": "publish_date_utc", "order": "desc"}` |
+| `page` | `page.from` | `0`, `15`, `30`... |
 
-**Valid radius values:** 1, 2, 5, 10, 15, 30, 50 km (other values are not indexed).
-
-### Required Headers
-
-```
-User-Agent: Dart/3.9 (dart:io)
-X-Funda-App-Platform: android
-Content-Type: application/json
-```
+**Valid radius values:** 1, 2, 5, 10, 15, 30, 50 km. Other values are mapped to the nearest indexed radius because those are the only radius buckets Funda exposes.
 
 ### Response Data
 
 Listing responses include:
+
 - **Identifiers** - globalId, tinyId
 - **AddressDetails** - title, city, postcode, province, neighbourhood, house number
-- **Price** - numeric and formatted prices (selling or rental), auction flag
+- **Price** - numeric and formatted prices, sale/rent metadata, auction flag
 - **FastView** - bedrooms, living area, plot area, energy label
-- **Media** - photos, floorplans, videos, 360° photos, brochure URL (all with CDN base URLs)
-- **KenmerkSections** - detailed property characteristics (70+ fields)
+- **Media** - photos, floorplans, videos, 360 photos, virtual tours, brochure URL
+- **KenmerkSections** - detailed property characteristics
 - **Coordinates** - latitude/longitude
 - **ObjectInsights** - view and save counts
-- **Advertising.TargetingOptions** - boolean features (garden, balcony, solar panels, heat pump, parking, etc.), construction year, room counts
+- **Advertising.TargetingOptions** - boolean features, construction year, room counts
 - **Share** - shareable URL
 - **GoogleMapsObjectUrl** - direct Google Maps link
 - **PublicationDate** - when the listing was published
 - **Tracking.Values.brokers** - broker ID and association
+
+pyfunda models the common stable fields as dataclasses and keeps the full original payload on `listing.raw`.
 
 ## API Reference
 
@@ -164,53 +176,77 @@ Main entry point for the API.
 ```python
 from funda import Funda
 
-f = Funda(timeout=30)
+client = Funda(timeout=30, max_retries=5, retry_backoff=0.1)
 ```
 
-#### get_listing(listing_id)
-
-Get a single listing by ID or URL.
+Use the client as a context manager when possible:
 
 ```python
-# By numeric ID (tinyId or globalId)
-listing = f.get_listing(43117443)
-
-# By URL
-listing = f.get_listing('https://www.funda.nl/detail/koop/city/house-name/43117443/')
+with Funda() as client:
+    listing = client.listing(43117443)
 ```
 
-#### search_listing(location, ...)
+### `listing(listing_id)`
 
-Search for listings with filters.
+Get a single listing by global ID, tiny ID, or Funda URL.
 
 ```python
-results = f.search_listing(
-    location='amsterdam',           # City or area name
-    offering_type='buy',            # 'buy' or 'rent'
-    price_min=200000,               # Minimum price
-    price_max=500000,               # Maximum price
-    area_min=50,                    # Minimum living area (m²)
-    area_max=150,                   # Maximum living area (m²)
-    plot_min=100,                   # Minimum plot area (m²)
-    plot_max=500,                   # Maximum plot area (m²)
-    object_type=['house'],          # Property types (default: house, apartment)
-    energy_label=['A', 'A+'],       # Energy labels to filter
-    sort='newest',                  # Sort order (see below)
-    page=0,                         # Page number (15 results per page)
+listing = client.listing(43117443)
+listing = client.listing("https://www.funda.nl/detail/koop/city/house-name/43117443/")
+```
+
+Raises `ListingNotFound` for missing listings and `FundaRequestError` for transport rejection or unexpected HTTP status.
+
+### `listings(listing_ids, workers=8)`
+
+Fetch many listings concurrently. Output order matches input order.
+
+```python
+details = client.listings([43117443, 43333315], workers=4)
+for listing in details:
+    print(listing.title)
+```
+
+Use `listing()` for one listing and `listings()` for batches.
+
+### `search(location=None, **filters)`
+
+Fetch one search page.
+
+```python
+results = client.search(
+    "amsterdam",
+    category="buy",          # buy, rent, sold
+    min_price=200000,
+    max_price=500000,
+    min_area=50,
+    max_area=150,
+    min_plot=100,
+    max_plot=500,
+    min_bedrooms=2,
+    object_type=["house", "apartment"],
+    energy_label=["A", "A+"],
+    construction_type="existing",
+    sort="newest",
+    page=0,
 )
 ```
 
 **Radius search** - search within a radius from a postcode or city:
 
 ```python
-results = f.search_listing(
-    location='1012AB',              # Postcode or city
-    radius_km=10,                   # Search radius in km
-    price_max=750000,
+results = client.search(
+    "1012AB",
+    radius_km=10,
+    max_price=750000,
 )
 ```
 
-> **Note:** Valid radius values are 1, 2, 5, 10, 15, 30, and 50 km. Other values are automatically mapped to the nearest valid radius.
+**Multiple locations:**
+
+```python
+results = client.search(["amsterdam", "rotterdam", "utrecht"])
+```
 
 **Sort options:**
 
@@ -226,325 +262,216 @@ results = f.search_listing(
 | `city` | Alphabetically by city |
 | `postcode` | Alphabetically by postcode |
 
-**Multiple locations:**
+### `iter_search(location=None, start_page=0, max_pages=None, workers=1, **filters)`
+
+Iterate across search pages. Set `workers > 1` with `max_pages` for concurrent page fetching.
 
 ```python
-results = f.search_listing(['amsterdam', 'rotterdam', 'utrecht'])
+for listing in client.iter_search("utrecht", max_pages=5, workers=3):
+    print(listing.title)
 ```
 
-#### get_latest_id()
+### `latest_listing_id()`
 
-Get the highest listing ID currently in Funda's search index.
+Get the highest listing ID currently visible in Funda's search index.
 
 ```python
-latest = f.get_latest_id()  # e.g., 7852306
+latest = client.latest_listing_id()
 ```
 
-#### poll_new_listings(since_id, ...)
+### `new_listings(since_id, max_consecutive_404s=20)`
 
-Generator that polls for new listings by incrementing IDs.
+Generator that polls for new listings by incrementing global IDs.
 
 ```python
-for listing in f.poll_new_listings(
-    since_id=7852306,           # Start from this ID + 1
-    max_consecutive_404s=20,    # Stop after N consecutive 404s
-    offering_type='buy',        # Filter: 'buy' or 'rent' (optional)
-):
-    print(listing['title'])
+for listing in client.new_listings(since_id=latest):
+    print("New:", listing.title, listing.url)
 ```
 
-This bypasses ES search and queries the detail API directly, catching listings that haven't been indexed yet.
+This bypasses search and queries the detail API directly, catching listings that may not be indexed yet.
 
-#### get_price_history(listing)
+### `price_history(listing)`
 
 Get historical price data for a listing, including previous asking prices, WOZ tax assessments, and sale history.
 
 ```python
-listing = f.get_listing(43032486)
-history = f.get_price_history(listing)
+listing = client.listing(43032486)
+history = client.price_history(listing)
 
-for change in history:
-    print(change['date'], change['human_price'], change['status'])
-# 22 okt, 2025    €435.000     asking_price
-# 1 jan, 2025     €472.000     woz
-# 19 aug, 2019    €300.000     asking_price
+for change in history.changes:
+    print(change.date, change.human_price, change.status)
 ```
 
-**Returns:** List of price changes, each containing:
+**Returns:** `PriceHistory` with `changes`, where each `PriceChange` contains:
 
 | Field | Description |
 |-------|-------------|
 | `price` | Numeric price |
-| `human_price` | Formatted price (e.g., "€435.000") |
+| `human_price` | Formatted price, for example `EUR435.000` |
 | `date` | Human readable date |
 | `timestamp` | ISO timestamp |
-| `source` | "Funda" or "WOZ" |
+| `source` | Data source, such as `Funda` or `WOZ` |
 | `status` | `asking_price`, `sold`, or `woz` |
 
-> **Note:** This fetches data from the Walter Living API. Only called when explicitly requested (lazy-loaded).
+> **Note:** This fetches data from the Walter Living API. It is only called when explicitly requested.
 
-#### get_contact_info(listing)
+### Enrichment methods
 
-Get the realtor/makelaar agency name and phone number for a listing. Accepts a `Listing`, a numeric id (globalId or tinyId), or a Funda URL.
+These methods are lazy and only make extra requests when called. They accept a `Listing`, numeric ID, or Funda URL unless noted otherwise.
 
-```python
-listing = f.get_listing(43333315)
-contact = f.get_contact_info(listing)
-
-print(contact['name'], contact['phone'])
-# Scheffer Makelaardij B.V. 020-2470322
-```
-
-**Returns:** A dict with the primary broker hoisted to the top level:
-
-| Field | Description |
-|-------|-------------|
-| `name` | Agency display name |
-| `phone` | Agency phone number |
-| `broker_id` | Numeric office id |
-| `association` | Trade association code (e.g. `VN`) |
-| `is_contacting_enabled` | Whether the in-app contact form is enabled |
-| `listing_id` / `tiny_id` / `listing_status` | Listing meta |
-| `brokers` | Full list of brokers (for the rare multi-agency case) |
-
-Raises `LookupError` if the listing has no contact info exposed.
-
-#### get_contact_form(listing)
-
-Get the agency's contact-form availability (which weekdays and times-of-day they accept inquiries through the in-app form).
+| Method | Purpose |
+|--------|---------|
+| `contact_info(listing)` | Realtor/makelaar agency name, phone, office ID, association, and contact metadata |
+| `contact_form(listing)` | Contact-form availability, office, weekdays, and times of day |
+| `listing_summary(listing)` | Lightweight listing summary without the full detail payload |
+| `similar_listings(listing)` | Recently listed and recently sold global IDs near a listing |
+| `market_insights(city, neighbourhood=None)` | Neighbourhood demographics and asking price per m2; also accepts a `Listing` |
+| `broker_info(broker)` | Broker profile: phone, email, website, address, services, certificates |
+| `broker_listings(broker)` | Listings handled by a broker, tagged by status |
+| `broker_reviews(broker)` | Review aggregate scores and recent review examples |
 
 ```python
-form = f.get_contact_form(43333315)
-print(form['days'], form['times_of_day'])
-# ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'] ['Morning', 'Afternoon']
+contact = client.contact_info(listing)
+form = client.contact_form(listing)
+summary = client.listing_summary(listing)
+similar = client.similar_listings(listing)
+insights = client.market_insights(listing)
+broker = client.broker_info(listing)
+handled = client.broker_listings(listing)
+reviews = client.broker_reviews(listing)
 ```
 
-**Returns:** Dict with `office_id`, `office_name`, `days`, `times_of_day`, `is_contacting_enabled`, `is_viewing_planner_enabled`, plus the raw `offices` list.
+## Listing Objects
 
-#### get_listing_summary(listing)
-
-Lightweight version of `get_listing` (no descriptions, photos, kenmerken). Faster and smaller, useful for batch enrichment.
-
-```python
-summary = f.get_listing_summary(7985628)
-print(summary['title'], summary['price'], summary['energy_label'])
-# Semarangstraat 13 650000 C
-```
-
-**Returns:** A `Listing` object with summary fields (`title`, `price`, `living_area`, `plot_area`, `bedrooms`, `energy_label`, `broker_name`, `url`, `thumbnail_url`, …).
-
-#### get_similar_listings(listing)
-
-Get globalIds of similar / recently-sold listings near a given listing. Returns IDs only; combine with `get_listing_summary` or `get_listing` to materialize them.
-
-```python
-sim = f.get_similar_listings(7988952)
-for gid in sim['recently_sold']:
-    print(f.get_listing_summary(gid)['title'])
-```
-
-**Returns:** Dict with `recently_listed` and `recently_sold`, each a list of integer globalIds.
-
-#### get_market_insights(city, neighbourhood)
-
-Neighbourhood demographics and average asking €/m² for a (city, neighbourhood) pair. Accepts a `Listing` directly to use its city/neighbourhood automatically.
-
-```python
-mi = f.get_market_insights('Amsterdam', 'Twiske-West')
-# {'city': 'Amsterdam', 'neighbourhood': 'Twiske-West',
-#  'inhabitants': 2510, 'families_with_children_pct': 43.96,
-#  'avg_asking_price_per_m2': 5975}
-
-# Or pass a Listing
-listing = f.get_listing(43333315)
-mi = f.get_market_insights(listing)
-```
-
-**Returns:** Dict with `city`, `neighbourhood`, `inhabitants`, `families_with_children_pct`, `avg_asking_price_per_m2`. Raises `LookupError` for unknown neighbourhoods (HTTP 204).
-
-#### get_broker_info(broker)
-
-Get the agency's profile page: phone, email, website, postal address, affiliation (NVM/VBO/…), description, certificates, languages, services. Accepts a numeric `broker_id` or a `Listing` (uses its `broker_id` automatically).
-
-```python
-info = f.get_broker_info(24716)
-print(info['name'], info['phone'], info['email'])
-# Simone Dijkman Makelaardij 075 7725155 info@simonedijkman.nl
-
-# Or chain from a listing
-listing = f.get_listing(43333315)
-info = f.get_broker_info(listing)
-```
-
-#### get_broker_listings(broker)
-
-Every listing the agency has handled, tagged by status. Useful for analyzing an agency's deal history (sold dates, prices, neighbourhoods).
-
-```python
-listings = f.get_broker_listings(24716)
-sold = [l for l in listings if l['status'] == 'sold']
-for_sale = [l for l in listings if l['status'] == 'for_sale']
-print(f"{len(sold)} sold, {len(for_sale)} active")
-```
-
-**Returns:** Flat list of dicts. Each entry has `status` (`sold`, `for_sale`, `purchased`), `listing_id`, `tiny_id`, `title`, `street`, `house_number`, `postcode`, `city`, `latitude`, `longitude`, `price`, `price_formatted`, `price_condition`, `publication_date`, `transaction_date`, `image_url`, `detail_url`.
-
-#### get_broker_reviews(broker)
-
-Customer reviews and aggregate scores per agency. The API returns only a representative sample of recent reviews — `number_of_reviews` is the true total.
-
-```python
-r = f.get_broker_reviews(24716)
-print(f"{r['average']}/10 over {r['number_of_reviews']} reviews")
-for review in r['reviews']:
-    print(review['date'], review['average'], review['text'][:60])
-```
-
-**Returns:** Dict with `average` (float), `number_of_reviews`, `selectivity_percentage`, a single `highlight` review, and a `reviews` list. Each review has subscores (`expertise`, `local_market_knowledge`, `price_and_quality`, `service_and_guidance`, `average`), `transaction_type`, `text`, and `date`.
-
-### Listing
-
-Listing objects support dict-like access with convenient aliases.
+`Listing` is an immutable dataclass with nested value objects. Prefer attributes over dict indexing.
 
 **Basic info:**
 
 ```python
-listing['title']            # Property title/address
-listing['city']             # City name
-listing['postcode']         # Postal code
-listing['province']         # Province
-listing['neighbourhood']    # Neighbourhood name
-listing['municipality']     # Municipality (gemeente)
-listing['house_number']     # House number
-listing['house_number_ext'] # House number extension (e.g., "A", "II")
+listing.title
+listing.city
+listing.postcode
+listing.address.province
+listing.address.neighbourhood
+listing.address.municipality
+listing.address.house_number
+listing.address.house_number_suffix
 ```
 
-**Price & Status:**
+**Price & status:**
 
 ```python
-listing['price']            # Numeric price
-listing['price_formatted']  # Formatted price string (e.g., "€ 450.000 k.k.")
-listing['price_per_m2']     # Price per m² (from characteristics)
-listing['status']           # "available" or "sold"
-listing['offering_type']    # "Sale" or "Rent"
+listing.price.amount
+listing.price.formatted
+listing.price.condition
+listing.price.is_auction
+listing.status
+listing.offering_type
 ```
 
 **Property details:**
 
 ```python
-listing['object_type']      # House, Apartment, etc.
-listing['house_type']       # Type of house (e.g., "Tussenwoning")
-listing['construction_type'] # New or existing construction
-listing['construction_year'] # Year built
-listing['bedrooms']         # Number of bedrooms
-listing['rooms']            # Total number of rooms
-listing['living_area']      # Living area in m²
-listing['plot_area']        # Plot area in m²
-listing['energy_label']     # Energy label (A, B, C, etc.)
-listing['description']      # Full description text
+listing.property_details.object_type
+listing.property_details.house_type
+listing.property_details.construction_type
+listing.property_details.construction_year
+listing.bedrooms
+listing.rooms_count
+listing.living_area
+listing.plot_area
+listing.energy_label
+listing.description
 ```
 
 **Dates:**
 
 ```python
-listing['publication_date'] # When listed on Funda
-listing['offered_since']    # "Offered since" date (from characteristics)
-listing['acceptance']       # Acceptance terms (e.g., "In overleg")
+listing.publication_date
+listing.characteristic("Aangeboden sinds")
+listing.characteristic("Aanvaarding")
 ```
 
 **Location:**
 
 ```python
-listing['coordinates']      # (lat, lng) tuple
-listing['latitude']         # Latitude
-listing['longitude']        # Longitude
-listing['google_maps_url']  # Direct Google Maps link
+listing.location.coordinates
+listing.location.latitude
+listing.location.longitude
+listing.location.google_maps_url
 ```
 
 **Media:**
 
 ```python
-listing['photos']           # List of photo IDs
-listing['photo_urls']       # List of full CDN URLs for photos
-listing['photo_count']      # Number of photos
-listing['floorplans']       # List of floorplan IDs
-listing['floorplan_urls']   # List of full CDN URLs for floorplans
-listing['videos']           # List of video IDs
-listing['video_urls']       # List of video URLs
-listing['photos_360']       # List of 360° photo dicts with name, id, url
-listing['brochure_url']     # PDF brochure URL (if available)
+listing.media.photo_urls
+listing.media.photo_count
+listing.media.floorplans
+listing.media.videos
+listing.media.photos_360
+listing.media.virtual_tours
+listing.media.brochure_url
 ```
 
-**Property features (booleans):**
+**Property features:**
 
 ```python
-listing['has_garden']           # Has garden
-listing['has_balcony']          # Has balcony
-listing['has_roof_terrace']     # Has roof terrace
-listing['has_solar_panels']     # Has solar panels
-listing['has_heat_pump']        # Has heat pump
-listing['has_parking_on_site']  # Parking on property
-listing['has_parking_enclosed'] # Enclosed parking
-listing['is_energy_efficient']  # Energy efficient property
-listing['is_monument']          # Listed/protected building
-listing['is_fixer_upper']       # Fixer-upper (kluswoning)
-listing['is_auction']           # Sold via auction
-listing['open_house']           # Has open house scheduled
+features = listing.property_details.features
+features["has_garden"]
+features["has_balcony"]
+features["has_roof_terrace"]
+features["has_solar_panels"]
+features["has_heat_pump"]
+features["has_parking_on_site"]
+features["has_parking_enclosed"]
+features["is_energy_efficient"]
+features["is_monument"]
+features["is_fixer_upper"]
 ```
 
 **Stats & metadata:**
 
 ```python
-listing['views']            # Number of views on Funda
-listing['saves']            # Number of times saved
-listing['highlight']        # Highlight text (blikvanger)
-listing['global_id']        # Internal Funda ID
-listing['tiny_id']          # Public ID (used in URLs)
-listing['url']              # Full Funda URL
-listing['share_url']        # Shareable URL
-listing['broker_id']        # Broker ID
-listing['broker_association'] # Broker association (e.g., "NVM")
-listing['characteristics']  # Dict of all detailed characteristics
+listing.insights.views if listing.insights else None
+listing.insights.saves if listing.insights else None
+listing.highlight
+listing.global_id
+listing.tiny_id
+listing.url
+listing.urls.share
+listing.broker
+listing.characteristics
+listing.sales_history
+listing.raw
 ```
 
-**Key aliases** - these all work:
-
-| Alias | Canonical Key |
-|-------|---------------|
-| `name`, `address` | `title` |
-| `location`, `locality` | `city` |
-| `area`, `size` | `living_area` |
-| `type`, `property_type` | `object_type` |
-| `images`, `pictures`, `media` | `photos` |
-| `agent`, `realtor`, `makelaar` | `broker` |
-| `zip`, `zipcode`, `postal_code` | `postcode` |
-
-#### Methods
+**Serialization:**
 
 ```python
-listing.summary()       # Text summary of the listing
-listing.to_dict()       # Convert to plain dictionary
-listing.keys()          # List available keys
-listing.get('key')      # Get with default (like dict.get)
-listing.getID()         # Get listing ID
+data = listing.to_dict()
+raw_data = listing.to_dict(include_raw=True)
 ```
 
 ## Examples
 
-### Find apartments in Amsterdam under €400k
+### Find apartments in Amsterdam under EUR400k
 
 ```python
 from funda import Funda
 
-f = Funda()
-results = f.search_listing('amsterdam', price_max=400000)
+with Funda() as client:
+    results = client.search(
+        "amsterdam",
+        max_price=400000,
+        object_type="apartment",
+        sort="newest",
+    )
 
-for listing in results:
-    print(f"{listing['title']}")
-    print(f"  Price: €{listing['price']:,}")
-    print(f"  Area: {listing.get('living_area', 'N/A')}")
-    print(f"  Bedrooms: {listing.get('bedrooms', 'N/A')}")
-    print()
+    for listing in results:
+        print(listing.title)
+        print(f"  Price: {listing.price.formatted or listing.price.amount}")
+        print(f"  Area: {listing.living_area or 'N/A'} m2")
+        print(f"  Bedrooms: {listing.bedrooms or 'N/A'}")
 ```
 
 ### Get detailed listing information
@@ -552,14 +479,16 @@ for listing in results:
 ```python
 from funda import Funda
 
-f = Funda()
-listing = f.get_listing(43117443)
+with Funda() as client:
+    listing = client.listing(43117443)
 
-print(listing.summary())
+    print(listing)
+    print(listing.description)
 
-# Access all characteristics
-for key, value in listing['characteristics'].items():
-    print(f"{key}: {value}")
+    for section in listing.characteristics:
+        print(section.title)
+        for item in section.items:
+            print(f"  {item.label}: {item.value}")
 ```
 
 ### Search rentals in multiple cities
@@ -567,14 +496,14 @@ for key, value in listing['characteristics'].items():
 ```python
 from funda import Funda
 
-f = Funda()
-results = f.search_listing(
-    location=['amsterdam', 'rotterdam', 'den-haag'],
-    offering_type='rent',
-    price_max=2000,
-)
+with Funda() as client:
+    results = client.search(
+        ["amsterdam", "rotterdam", "den-haag"],
+        category="rent",
+        max_price=2000,
+    )
 
-print(f"Found {len(results)} rentals")
+    print(f"Found {len(results)} rentals")
 ```
 
 ### Find energy-efficient homes with a garden
@@ -582,33 +511,32 @@ print(f"Found {len(results)} rentals")
 ```python
 from funda import Funda
 
-f = Funda()
-listing = f.get_listing(43117443)
+with Funda() as client:
+    listing = client.listing(43117443)
+    features = listing.property_details.features
 
-# Check property features
-if listing['has_garden'] and listing.get('has_solar_panels'):
-    print("Energy efficient with garden!")
+    if features.get("has_garden") and features.get("has_solar_panels"):
+        print("Energy efficient with garden")
 
-if listing['is_energy_efficient']:
-    print(f"Energy label: {listing['energy_label']}")
+    if features.get("is_energy_efficient"):
+        print(f"Energy label: {listing.energy_label}")
 ```
 
 ### Download listing photos
 
 ```python
-from funda import Funda
+from pathlib import Path
+
 import requests
+from funda import Funda
 
-f = Funda()
-listing = f.get_listing(43117443)
+with Funda() as client:
+    listing = client.listing(43117443)
 
-# Photo URLs are ready to use
-for i, url in enumerate(listing['photo_urls'][:5]):
-    response = requests.get(url)
-    with open(f"photo_{i}.jpg", "wb") as file:
-        file.write(response.content)
-
-# Also available: floorplan_urls, video_urls
+for index, url in enumerate(listing.media.photo_urls[:5]):
+    response = requests.get(url, timeout=30)
+    response.raise_for_status()
+    Path(f"photo_{index}.jpg").write_bytes(response.content)
 ```
 
 ### Search by radius from postcode
@@ -616,77 +544,139 @@ for i, url in enumerate(listing['photo_urls'][:5]):
 ```python
 from funda import Funda
 
-f = Funda()
-results = f.search_listing(
-    location='1012AB',
-    radius_km=15,
-    price_max=600000,
-    energy_label=['A', 'A+', 'A++'],
-    sort='newest',
-)
+with Funda() as client:
+    results = client.search(
+        "1012AB",
+        radius_km=15,
+        max_price=600000,
+        energy_label=["A", "A+", "A++"],
+        sort="newest",
+    )
 
-for r in results:
-    print(f"{r['title']} - €{r['price']:,}")
+    for listing in results:
+        print(listing.title, listing.price.formatted)
 ```
 
-### Poll for new listings (bypass ES lag)
+### Poll for new listings
 
-Funda's search index can lag behind the actual database by hours. Use `poll_new_listings` to find listings that search doesn't show yet:
+Funda's search index can lag behind the actual database. Use `new_listings()` to find listings that search may not show yet:
 
 ```python
 from funda import Funda
 
-f = Funda()
+with Funda() as client:
+    latest_id = client.latest_listing_id()
 
-# Get starting point from search (one-time)
-latest_id = f.get_latest_id()  # e.g., 7852306
-
-# Poll for new listings by incrementing IDs
-for listing in f.poll_new_listings(since_id=latest_id):
-    print(f"New: {listing['title']}, {listing['city']}")
-    print(f"     {listing['url']}")
-
-# Filter by type
-for listing in f.poll_new_listings(since_id=latest_id, offering_type="buy"):
-    print(f"New sale: {listing['title']}")
+    for listing in client.new_listings(since_id=latest_id):
+        print(f"New: {listing.title}, {listing.city}")
+        print(f"     {listing.url}")
 ```
 
-The generator stops after 20 consecutive 404s (configurable via `max_consecutive_404s`).
+The generator stops after 20 consecutive 404s by default. Change this with `max_consecutive_404s`.
 
 ### Get price history for a listing
 
 ```python
 from funda import Funda
 
-f = Funda()
-listing = f.get_listing(43032486)
+with Funda() as client:
+    listing = client.listing(43032486)
+    history = client.price_history(listing)
 
-# Fetch historical prices (WOZ assessments, previous asking prices, sales)
-history = f.get_price_history(listing)
+    print(f"Price history for {listing.title}:")
+    for change in history.changes:
+        print(f"  {change.date}: {change.human_price} ({change.status})")
 
-print(f"Price history for {listing['title']}:")
-for change in history:
-    print(f"  {change['date']}: {change['human_price']} ({change['status']})")
-
-# Calculate price change over time
-funda_prices = [c for c in history if c['source'] == 'Funda']
-if len(funda_prices) >= 2:
-    newest, oldest = funda_prices[0]['price'], funda_prices[-1]['price']
-    change_pct = ((newest - oldest) / oldest) * 100
-    print(f"\nPrice change: {change_pct:+.1f}%")
+    funda_prices = [change for change in history.changes if change.source == "Funda" and change.price]
+    if len(funda_prices) >= 2:
+        newest, oldest = funda_prices[0].price, funda_prices[-1].price
+        change_pct = ((newest - oldest) / oldest) * 100
+        print(f"Price change: {change_pct:+.1f}%")
 ```
+
+### Broker due diligence
+
+```python
+from funda import Funda
+
+with Funda() as client:
+    listing = client.listing(43333315)
+    broker = client.broker_info(listing)
+    reviews = client.broker_reviews(listing)
+    handled = client.broker_listings(listing)
+
+    print(broker["name"], broker.get("phone"), broker.get("email"))
+    print(f"{reviews.get('average')}/10 over {reviews.get('number_of_reviews')} reviews")
+    print(f"{len(handled)} handled listings")
+```
+
+### Parallel batch details
+
+```python
+from funda import Funda
+
+ids = [43117443, 43333315]
+
+with Funda() as client:
+    listings = client.listings(ids, workers=4)
+
+for listing in listings:
+    print(listing.title, listing.city)
+```
+
+## Runnable Examples
+
+Runnable examples live in `examples/`:
+
+| File | Purpose |
+| --- | --- |
+| `full_api_walkthrough.py` | Small end-to-end walkthrough of the public API |
+| `batch_details.py` | Parallel detail fetching for known IDs |
+| `broker_due_diligence.py` | Broker profile, reviews, and handled listings |
+| `enrichment_export.py` | Export a listing plus enrichment data to JSON |
+| `neighborhood_market_snapshot.py` | Compare search sample with local market insights |
+| `similar_sales_comp.py` | Build comparable-sales rows from similar sold listings |
+| `search_sold.py` | Search sold listings and print summary stats |
+| `export_to_csv.py` | Export search results to CSV or XLSX |
+| `new_listings_alert.py` | Alert on new listings matching a search |
+| `poll_new_listings.py` | Poll by incrementing listing IDs |
+| `price_history.py` | Print historical price changes |
+| `price_tracker.py` | Persist and track listing price changes |
+| `almere_age_rank.py` | Compare construction year distribution |
+| `analysis.ipynb` | Pandas analysis notebook |
+
+## Tests
+
+Fast local tests:
+
+```bash
+uv run python -m unittest discover -s tests
+```
+
+Live Funda smoke tests:
+
+```bash
+PYFUNDA_LIVE=1 uv run python -m unittest tests.test_live -v
+```
+
+Live tests verify listing, search, parallel fetching, and enrichment endpoints.
+
+## More Documentation
+
+- [API reference](docs/API.md)
+- [Development and testing](docs/DEVELOPMENT.md)
 
 ## Disclaimer
 
 This is an unofficial library and is not affiliated with, authorized, maintained, sponsored, or endorsed by Funda or any of its affiliates. Use at your own risk.
 
-This library only accesses publicly available listing data through Funda's undocumented internal API. Using this library may violate Funda's Terms of Service. The authors are not responsible for any consequences of using this software.
+This library only accesses publicly available listing data through Funda's undocumented internal APIs. Using this library may violate Funda's Terms of Service. The authors are not responsible for any consequences of using this software.
 
 This project is intended for personal use, research, and educational purposes only.
 
-- The API is undocumented and may change or break at any time without notice.
+- The APIs are undocumented and may change or break at any time without notice.
 - Please use this library responsibly and avoid excessive requests that could burden Funda's infrastructure.
-- Scraped data may be subject to copyright and usage restrictions. Ensure your use complies with applicable laws.
+- Data may be subject to copyright and usage restrictions. Ensure your use complies with applicable laws.
 
 ## License
 
