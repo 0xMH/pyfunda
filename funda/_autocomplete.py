@@ -1,4 +1,4 @@
-"""Autocomplete payload construction."""
+"""Internal autocomplete payload construction."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from funda.models import JsonDict
 
 
 @dataclass(frozen=True, slots=True)
-class _LocationAutocomplete:
+class LocationAutocomplete:
     value: str
     timeout: str = "3s"
     size: int = 10

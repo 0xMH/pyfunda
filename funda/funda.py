@@ -28,7 +28,7 @@ from funda.constants import (
     PAGE_SIZE,
 )
 from funda.exceptions import FundaRequestError, ListingNotFound, PriceHistoryError, SearchError
-from funda.autocomplete import _LocationAutocomplete
+from funda._autocomplete import LocationAutocomplete
 from funda.listing import Listing, LocationSuggestion, PriceHistory
 from funda.models import JsonDict
 from funda.parsing import (
@@ -84,7 +84,7 @@ class Funda:
     def __enter__(self) -> "Funda":
         return self
 
-    def __exit__(self, *args) -> None:
+    def __exit__(self, *_) -> None:
         self.close()
 
     def listing(self, listing_id: int | str) -> Listing:
@@ -130,7 +130,7 @@ class Funda:
         sort: Sequence[Any] | None = None,
     ) -> list[LocationSuggestion]:
         """Suggest Funda location identifiers for search-box text."""
-        autocomplete = _LocationAutocomplete(
+        autocomplete = LocationAutocomplete(
             value=value,
             size=size,
             timeout=timeout,
@@ -434,7 +434,7 @@ class Funda:
 
         raise SearchError("Search failed without a response")
 
-    def _autocomplete(self, autocomplete: _LocationAutocomplete) -> JsonDict:
+    def _autocomplete(self, autocomplete: LocationAutocomplete) -> JsonDict:
         payload = autocomplete.to_payload()
         for attempt in range(3):
             response = self._transport.post(

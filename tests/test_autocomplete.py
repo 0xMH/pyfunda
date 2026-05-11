@@ -1,6 +1,6 @@
 import unittest
 
-from funda.autocomplete import _LocationAutocomplete
+from funda._autocomplete import LocationAutocomplete
 from funda.constants import (
     LOCATION_AUTOCOMPLETE_AREA_TYPES,
     LOCATION_AUTOCOMPLETE_TEMPLATE_ID,
@@ -45,7 +45,7 @@ AUTOCOMPLETE_RESPONSE = {
 
 class AutocompleteTests(unittest.TestCase):
     def test_payload_matches_funda_searchbox_template(self) -> None:
-        payload = _LocationAutocomplete("almere poor").to_payload()
+        payload = LocationAutocomplete("almere poor").to_payload()
 
         self.assertEqual(payload["id"], LOCATION_AUTOCOMPLETE_TEMPLATE_ID)
         self.assertEqual(payload["params"]["value"], "almere poor")
@@ -60,7 +60,7 @@ class AutocompleteTests(unittest.TestCase):
         )
 
     def test_payload_can_limit_area_types_for_vague_area_searches(self) -> None:
-        payload = _LocationAutocomplete(
+        payload = LocationAutocomplete(
             "amsterdam west",
             area_types=("city", "municipality", "neighborhood", "wijk"),
             size=5,
@@ -74,9 +74,9 @@ class AutocompleteTests(unittest.TestCase):
 
     def test_invalid_payload_values_fail_before_network(self) -> None:
         with self.assertRaises(ValueError):
-            _LocationAutocomplete("").to_payload()
+            LocationAutocomplete("").to_payload()
         with self.assertRaises(ValueError):
-            _LocationAutocomplete("amsterdam", size=0).to_payload()
+            LocationAutocomplete("amsterdam", size=0).to_payload()
 
     def test_parse_location_suggestions_maps_geo_hits(self) -> None:
         suggestions = parse_location_suggestions(AUTOCOMPLETE_RESPONSE)
