@@ -18,6 +18,11 @@ class ConstructionPeriod:
     year_min: int
     year_max: int
 
+    def overlaps(self, minimum: int | None = None, maximum: int | None = None) -> bool:
+        year_min = minimum if minimum is not None else 0
+        year_max = maximum if maximum is not None else 9999
+        return self.year_max >= year_min and self.year_min <= year_max
+
 
 @dataclass(frozen=True, slots=True)
 class Fingerprint:

@@ -319,9 +319,10 @@ def _characteristics(items_value: Any, section_title: str | None) -> tuple[Chara
 def _characteristic_values(sections: tuple[CharacteristicSection, ...]) -> JsonDict:
     values: JsonDict = {}
     for section in sections:
-        for item in _walk(section.items):
-            if item.label and item.value is not None:
-                values[item.label] = item.value
+        for root in section.items:
+            for item in root.walk():
+                if item.label and item.value is not None:
+                    values[item.label] = item.value
     return values
 
 
@@ -382,9 +383,3 @@ def _features(ads: Mapping[str, Any]) -> JsonDict:
 
 def _highlight(data: Mapping[str, Any]) -> str | None:
     return mapping(mapping(data.get("Promo")).get("Blikvanger")).get("Text")
-
-
-def _walk(items: tuple[Characteristic, ...]):
-    for item in items:
-        yield item
-        yield from _walk(item.children)

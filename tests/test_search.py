@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from funda.search import _Search, _search_payload
+from funda.search import _Search
 
 
 class SearchTests(unittest.TestCase):
@@ -36,6 +36,18 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(params["radius_search"]["id"], "haarlem-0")
         self.assertEqual(params["radius_search"]["path"], "area_with_radius.5")
 
+    def test_construction_year_maps_to_overlapping_periods(self) -> None:
+        params = _Search.from_filters(
+            "amsterdam",
+            min_construction_year=1995,
+            max_construction_year=2005,
+        ).to_params()
+
+        self.assertEqual(
+            params["construction_period"],
+            ["from_1991_to_2000", "from_2001_to_2010"],
+        )
+
     def test_invalid_filters_fail_before_network(self) -> None:
         with self.assertRaises(TypeError):
             _Search.from_filters("amsterdam", does_not_exist=True)
@@ -45,9 +57,11 @@ class SearchTests(unittest.TestCase):
             _Search.from_filters(["amsterdam", "haarlem"], radius_km=5).to_params()
         with self.assertRaises(ValueError):
             _Search.from_filters("amsterdam", category="lease").to_params()
+        with self.assertRaises(ValueError):
+            _Search.from_filters("amsterdam", sort="popular").to_params()
 
     def test_search_payload_is_ndjson_template_request(self) -> None:
-        payload = _search_payload(_Search.from_filters("amsterdam"))
+        payload = _Search.from_filters("amsterdam").to_payload()
         lines = payload.splitlines()
 
         self.assertEqual(len(lines), 2)

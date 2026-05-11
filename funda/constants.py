@@ -7,6 +7,9 @@ API_BASE = "https://listing-detail-page.funda.io/api/v4/listing/object/nl"
 API_LISTING = f"{API_BASE}/{{listing_id}}"
 API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
 API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
+API_LOCATION_AUTOCOMPLETE = (
+    "https://listing-search-wonen.funda.io/geo-wonen-alias-prod/_search/template"
+)
 API_WALTER = "https://api.walterliving.com/hunter/lookup"
 API_CONTACTS = (
     "https://contacts-flows-bff.funda.io/api/v1/contacts-flows/"
@@ -34,6 +37,18 @@ API_BROKER_REVIEWS = (
 
 SEARCH_INDEX = "listings-wonen-searcher-alias-prod"
 SEARCH_TEMPLATE_ID = "search_result_20250805"
+LOCATION_AUTOCOMPLETE_TEMPLATE_ID = "searchbox_20250805"
+LOCATION_AUTOCOMPLETE_AREA_TYPES = (
+    "country",
+    "city",
+    "province",
+    "region",
+    "municipality",
+    "street",
+    "postal_code",
+    "neighborhood",
+    "wijk",
+)
 
 PAGE_SIZE = 15
 VALID_RADII = (1, 2, 5, 10, 15, 30, 50)

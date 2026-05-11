@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
@@ -16,8 +17,18 @@ class DictValue:
     def to_dict(self, *, include_raw: bool = False) -> JsonDict:
         data = asdict(self)
         if not include_raw:
-            _drop_raw(data)
+            self._drop_raw(data)
         return data
+
+    @staticmethod
+    def _drop_raw(value: Any) -> None:
+        if isinstance(value, dict):
+            value.pop("raw", None)
+            for child in value.values():
+                DictValue._drop_raw(child)
+        elif isinstance(value, list | tuple):
+            for child in value:
+                DictValue._drop_raw(child)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +63,36 @@ class GeoLocation(DictValue):
         if self.latitude is None or self.longitude is None:
             return None
         return self.latitude, self.longitude
+
+
+@dataclass(frozen=True, slots=True)
+class LocationArea(DictValue):
+    name: str | None = None
+    geo_identifier: str | None = None
+    area_type: str | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class LocationSuggestion(DictValue):
+    id: str | None = None
+    name: str | None = None
+    geo_identifier: str | None = None
+    area_type: str | None = None
+    parent: LocationArea | None = None
+    parent_areas: tuple[LocationArea, ...] = ()
+    synonyms: tuple[str, ...] = ()
+    location: GeoLocation = field(default_factory=GeoLocation)
+    score: float | None = None
+    raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
+
+    @property
+    def label(self) -> str | None:
+        if not self.name:
+            return None
+        if self.parent and self.parent.name and self.parent.name != self.name:
+            return f"{self.name}, {self.parent.name}"
+        return self.name
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +224,11 @@ class Characteristic(DictValue):
     children: tuple["Characteristic", ...] = ()
     raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
 
+    def walk(self) -> Iterator["Characteristic"]:
+        yield self
+        for child in self.children:
+            yield from child.walk()
+
 
 @dataclass(frozen=True, slots=True)
 class CharacteristicSection(DictValue):
@@ -192,9 +238,10 @@ class CharacteristicSection(DictValue):
 
     def get(self, label: str, default: Any = None) -> Any:
         needle = label.casefold()
-        for item in _walk_characteristics(self.items):
-            if item.label and item.label.casefold() == needle:
-                return item.value
+        for root in self.items:
+            for item in root.walk():
+                if item.label and item.label.casefold() == needle:
+                    return item.value
         return default
 
 
@@ -325,11 +372,11 @@ class Listing(DictValue):
         return self.property_details.status
 
     def characteristic(self, label: str, default: Any = None) -> Any:
-        needle = label.casefold()
+        missing = object()
         for section in self.characteristics:
-            for item in _walk_characteristics(section.items):
-                if item.label and item.label.casefold() == needle:
-                    return item.value
+            value = section.get(label, missing)
+            if value is not missing:
+                return value
         return default
 
 
@@ -356,19 +403,3 @@ class PriceHistory(DictValue):
     trigger_popup: bool | None = None
     listing_count: int | None = None
     raw: JsonDict = field(default_factory=dict, repr=False, compare=False)
-
-
-def _walk_characteristics(items: tuple[Characteristic, ...]):
-    for item in items:
-        yield item
-        yield from _walk_characteristics(item.children)
-
-
-def _drop_raw(value: Any) -> None:
-    if isinstance(value, dict):
-        value.pop("raw", None)
-        for child in value.values():
-            _drop_raw(child)
-    elif isinstance(value, list | tuple):
-        for child in value:
-            _drop_raw(child)

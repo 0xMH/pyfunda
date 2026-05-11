@@ -1,6 +1,13 @@
 import unittest
 
-from funda import Address, Characteristic, Listing, Price, SalesHistory
+from funda import (
+    Address,
+    Characteristic,
+    CharacteristicSection,
+    Listing,
+    Price,
+    SalesHistory,
+)
 
 
 class ListingModelTests(unittest.TestCase):
@@ -40,6 +47,22 @@ class ListingModelTests(unittest.TestCase):
 
         self.assertEqual(history.sale_date, "10 mei 2026")
         self.assertEqual(history.time_on_market, "3 maanden")
+
+    def test_characteristic_lookup_walks_nested_items(self) -> None:
+        listing = Listing(
+            characteristics=(
+                CharacteristicSection(
+                    items=(
+                        Characteristic(
+                            label="Buitenruimte",
+                            children=(Characteristic(label="Tuin", value="Achtertuin"),),
+                        ),
+                    )
+                ),
+            )
+        )
+
+        self.assertEqual(listing.characteristic("tuin"), "Achtertuin")
 
 
 if __name__ == "__main__":

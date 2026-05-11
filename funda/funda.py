@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 from funda._parallel import _ParallelRunner
 from funda._transport import _FundaTransport
 from funda.constants import (
+    API_LOCATION_AUTOCOMPLETE,
     API_BROKER_INFO,
     API_BROKER_LISTINGS,
     API_BROKER_REVIEWS,
@@ -23,10 +24,12 @@ from funda.constants import (
     API_SIMILAR,
     API_WALTER,
     DEFAULT_MAX_RETRIES,
+    LOCATION_AUTOCOMPLETE_AREA_TYPES,
     PAGE_SIZE,
 )
 from funda.exceptions import FundaRequestError, ListingNotFound, PriceHistoryError, SearchError
-from funda.listing import Listing, PriceHistory
+from funda.autocomplete import _LocationAutocomplete
+from funda.listing import Listing, LocationSuggestion, PriceHistory
 from funda.models import JsonDict
 from funda.parsing import (
     parse_broker_info,
@@ -36,12 +39,13 @@ from funda.parsing import (
     parse_contact_info,
     parse_listing,
     parse_listing_summary,
+    parse_location_suggestions,
     parse_market_insights,
     parse_price_history,
     parse_search_results,
     parse_similar_listings,
 )
-from funda.search import _Search, _search_payload
+from funda.search import _Search
 
 
 _TextValues = str | Sequence[str] | None
@@ -113,6 +117,29 @@ class Funda:
         **filters,
     ) -> list[Listing]:
         return self._search_results(_Search.from_filters(location, **filters))
+
+    def autocomplete(
+        self,
+        value: str,
+        *,
+        size: int = 10,
+        timeout: str = "3s",
+        area_types: Sequence[str] | None = None,
+        exclude: Sequence[str] | None = None,
+        use_sort: bool = False,
+        sort: Sequence[Any] | None = None,
+    ) -> list[LocationSuggestion]:
+        """Suggest Funda location identifiers for search-box text."""
+        autocomplete = _LocationAutocomplete(
+            value=value,
+            size=size,
+            timeout=timeout,
+            area_types=area_types or LOCATION_AUTOCOMPLETE_AREA_TYPES,
+            exclude=exclude or (),
+            use_sort=use_sort,
+            sort=sort or (),
+        )
+        return parse_location_suggestions(self._autocomplete(autocomplete))
 
     def iter_search(
         self,
@@ -274,8 +301,8 @@ class Funda:
     ) -> JsonDict:
         """Get local market insight data for a city and neighbourhood."""
         city_name, neighbourhood_name = self._market_location(city, neighbourhood)
-        city_slug = _market_slug(city_name)
-        neighbourhood_slug = _market_slug(neighbourhood_name)
+        city_slug = self._market_slug(city_name)
+        neighbourhood_slug = self._market_slug(neighbourhood_name)
         data = self._get_json(
             API_MARKET_INSIGHTS.format(city=city_slug, neighbourhood=neighbourhood_slug),
             error="Could not fetch market insights",
@@ -387,8 +414,12 @@ class Funda:
             raise ValueError("city and neighbourhood are required")
         return city_name, neighbourhood_name
 
+    @staticmethod
+    def _market_slug(value: str) -> str:
+        return quote("-".join(value.strip().lower().split()), safe="-")
+
     def _search(self, search: _Search) -> JsonDict:
-        payload = _search_payload(search)
+        payload = search.to_payload()
         for attempt in range(3):
             response = self._transport.post(API_SEARCH, profile="search", data=payload)
             if response.status_code == 200:
@@ -402,6 +433,28 @@ class Funda:
             raise SearchError(f"Search failed (status {response.status_code}){suffix}")
 
         raise SearchError("Search failed without a response")
+
+    def _autocomplete(self, autocomplete: _LocationAutocomplete) -> JsonDict:
+        payload = autocomplete.to_payload()
+        for attempt in range(3):
+            response = self._transport.post(
+                API_LOCATION_AUTOCOMPLETE,
+                profile="search",
+                json_data=payload,
+            )
+            if response.status_code == 200:
+                return response.json()
+            if response.status_code == 400 and attempt < 2:
+                time.sleep(0.1 * (attempt + 1))
+                continue
+
+            detail = getattr(response, "text", "")[:200]
+            suffix = f": {detail}" if detail else ""
+            raise SearchError(
+                f"Location autocomplete failed (status {response.status_code}){suffix}"
+            )
+
+        raise SearchError("Location autocomplete failed without a response")
 
     def _search_results(self, search: _Search) -> list[Listing]:
         return parse_search_results(self._search(search))
@@ -453,7 +506,3 @@ class Funda:
         if len(listing_id) >= 8:
             return API_LISTING_TINY.format(tiny_id=listing_id), global_url
         return (global_url,)
-
-
-def _market_slug(value: str) -> str:
-    return quote("-".join(value.strip().lower().split()), safe="-")

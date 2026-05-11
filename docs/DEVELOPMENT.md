@@ -16,6 +16,7 @@ dependency is required.
 | --- | --- |
 | `tests/test_client.py` | Client routing, id parsing, JSON handling |
 | `tests/test_search.py` | Search payload construction and validation |
+| `tests/test_autocomplete.py` | Location autocomplete payloads and parser behavior |
 | `tests/test_models.py` | Dataclass model behavior |
 | `tests/test_enrichment_parser.py` | Auxiliary endpoint parser normalization |
 | `tests/test_transport_parallel.py` | Retry rotation, headers, parallel runner |
@@ -33,8 +34,9 @@ Live tests:
 PYFUNDA_LIVE=1 uv run python -m unittest tests.test_live -v
 ```
 
-Live tests intentionally stay narrow. Do not add broad city sweeps or large
-parallel batches to the default live checks.
+Live tests verify listing, search, parallel fetching, and enrichment endpoints.
+They intentionally stay narrow. Do not add broad city sweeps or large parallel
+batches to the default live checks.
 
 ## Verification Checklist
 

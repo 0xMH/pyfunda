@@ -49,7 +49,11 @@ class _Bounds:
     maximum: int | None = None
 
     def __post_init__(self) -> None:
-        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+        if (
+            self.minimum is not None
+            and self.maximum is not None
+            and self.minimum > self.maximum
+        ):
             raise ValueError("minimum must be <= maximum")
 
     def __bool__(self) -> bool:
@@ -62,6 +66,20 @@ class _Bounds:
         if self.maximum is not None:
             params["to"] = self.maximum
         return params
+
+    def add_to(self, params: JsonDict, key: str) -> None:
+        if self:
+            params[key] = self.to_params()
+
+
+@dataclass(frozen=True, slots=True)
+class _ConstructionYearBounds(_Bounds):
+    def to_period_keys(self) -> list[str]:
+        return [
+            period.key
+            for period in CONSTRUCTION_PERIODS
+            if period.overlaps(self.minimum, self.maximum)
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +95,9 @@ class _Search:
     object_type: _TextValues = None
     energy_label: _TextValues = None
     construction_type: _TextValues = None
-    construction_year: _Bounds = field(default_factory=_Bounds)
+    construction_year: _ConstructionYearBounds = field(
+        default_factory=_ConstructionYearBounds
+    )
     radius_km: int | None = None
     sort: str | None = None
     page: int = 0
@@ -88,10 +108,15 @@ class _Search:
         values["category"] = str(values["category"] or "buy").lower()
         values["page"] = values["page"] or 0
 
-        bounds = {
-            field_name: _Bounds(filters.pop(min_name, None), filters.pop(max_name, None))
-            for field_name, (min_name, max_name) in _RANGE_FILTERS.items()
-        }
+        bounds: dict[str, _Bounds] = {}
+        for field_name, (min_name, max_name) in _RANGE_FILTERS.items():
+            bounds_type = (
+                _ConstructionYearBounds if field_name == "construction_year" else _Bounds
+            )
+            bounds[field_name] = bounds_type(
+                filters.pop(min_name, None),
+                filters.pop(max_name, None),
+            )
 
         if filters:
             names = ", ".join(sorted(filters))
@@ -101,6 +126,12 @@ class _Search:
 
     def with_page(self, page: int) -> "_Search":
         return replace(self, page=page)
+
+    def to_payload(self) -> str:
+        params = self.to_params()
+        index_line = json.dumps({"index": SEARCH_INDEX})
+        query_line = json.dumps({"id": SEARCH_TEMPLATE_ID, "params": params})
+        return f"{index_line}\n{query_line}\n"
 
     @property
     def offering(self) -> str:
@@ -112,17 +143,18 @@ class _Search:
 
     def to_params(self) -> JsonDict:
         self._validate()
-        locations = _as_list(self.location)
+        locations = self._text_values(self.location)
 
         params: JsonDict = {
-            "availability": _availability_values(self.availability),
+            "availability": self._availability_values(),
             "type": ["single"],
             "zoning": ["residential"],
-            "object_type": _as_list(self.object_type) or ["house", "apartment"],
+            "object_type": self._text_values(self.object_type)
+            or ["house", "apartment"],
             "publication_date": {"no_preference": True},
             "offering_type": self.offering,
             "page": {"from": self.page * PAGE_SIZE},
-            "sort": _sort_params(self.sort),
+            "sort": self._sort_params(),
         }
 
         self._add_location(params, locations)
@@ -136,102 +168,89 @@ class _Search:
         if self.category not in _VALID_CATEGORIES:
             raise ValueError("category must be 'buy', 'rent', or 'sold'")
 
-        if self.category == "sold" and _as_list(self.status) not in (None, ["sold"]):
+        if self.category == "sold" and self._text_values(self.status) not in (
+            None,
+            ["sold"],
+        ):
             raise ValueError("category='sold' cannot be combined with status")
 
-        status = _status_input(self.availability)
+        status = self._status_values(self.availability)
         invalid_status = sorted(set(status) - set(VALID_AVAILABILITY))
         if invalid_status:
             raise ValueError(f"invalid status values: {invalid_status}")
 
-        locations = _as_list(self.location)
+        locations = self._text_values(self.location)
         if self.radius_km is not None and (not locations or len(locations) != 1):
             raise ValueError("radius_km requires exactly one location")
 
     def _add_location(self, params: JsonDict, locations: list[str] | None) -> None:
         if locations and self.radius_km is not None:
-            params["radius_search"] = _radius_params(locations[0], self.radius_km)
+            params["radius_search"] = self._radius_params(locations[0])
         elif locations:
             params["selected_area"] = [location.lower() for location in locations]
 
     def _add_bounds(self, params: JsonDict) -> None:
-        _add_bounds(params, "floor_area", self.area)
-        _add_bounds(params, "plot_area", self.plot)
-        _add_bounds(params, "rooms", self.rooms)
-        _add_bounds(params, "bedrooms", self.bedrooms)
+        self.area.add_to(params, "floor_area")
+        self.plot.add_to(params, "plot_area")
+        self.rooms.add_to(params, "rooms")
+        self.bedrooms.add_to(params, "bedrooms")
 
         if self.price:
             price_key = "selling_price" if self.offering == "buy" else "rent_price"
             params["price"] = {price_key: self.price.to_params()}
 
         if self.construction_year:
-            periods = _construction_period_keys(self.construction_year.minimum, self.construction_year.maximum)
+            periods = self.construction_year.to_period_keys()
             if periods:
                 params["construction_period"] = periods
 
     def _add_optional_values(self, params: JsonDict) -> None:
-        if self.energy_label:
-            params["energy_label"] = _as_list(self.energy_label)
-        if self.construction_type:
-            params["construction_type"] = _as_list(self.construction_type)
+        energy_label = self._text_values(self.energy_label)
+        if energy_label:
+            params["energy_label"] = energy_label
 
+        construction_type = self._text_values(self.construction_type)
+        if construction_type:
+            params["construction_type"] = construction_type
 
-def _search_payload(search: _Search) -> str:
-    params = search.to_params()
-    index_line = json.dumps({"index": SEARCH_INDEX})
-    query_line = json.dumps({"id": SEARCH_TEMPLATE_ID, "params": params})
-    return f"{index_line}\n{query_line}\n"
+    def _availability_values(self) -> list[str]:
+        return [
+            "unavailable" if value == "sold" else value
+            for value in self._status_values(self.availability)
+        ]
 
+    def _sort_params(self) -> JsonDict:
+        if not self.sort:
+            return {"field": None, "order": None}
+        if self.sort not in SORT_OPTIONS:
+            raise ValueError(f"invalid sort value: {self.sort!r}")
+        field, order = SORT_OPTIONS[self.sort]
+        return {"field": field, "order": order}
 
-def _construction_period_keys(
-    construction_year_min: int | None = None,
-    construction_year_max: int | None = None,
-) -> list[str]:
-    year_min = construction_year_min if construction_year_min is not None else 0
-    year_max = construction_year_max if construction_year_max is not None else 9999
-    return [
-        period.key
-        for period in CONSTRUCTION_PERIODS
-        if period.year_max >= year_min and period.year_min <= year_max
-    ]
+    def _radius_params(self, location: str) -> JsonDict:
+        if self.radius_km is None:
+            raise ValueError("radius_km is required")
 
+        radius = min(
+            VALID_RADII,
+            key=lambda valid_radius: abs(valid_radius - self.radius_km),
+        )
+        return {
+            "index": "geo-wonen-alias-prod",
+            "id": location.lower().replace(" ", "-") + "-0",
+            "path": f"area_with_radius.{radius}",
+        }
 
-def _as_list(value: _TextValues) -> list[str] | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return [value]
-    return list(value)
+    @staticmethod
+    def _status_values(status: _TextValues) -> list[str]:
+        if status is None:
+            return ["available", "negotiations"]
+        return _Search._text_values(status) or []
 
-
-def _availability_values(status: _TextValues) -> list[str]:
-    return ["unavailable" if value == "sold" else value for value in _status_input(status)]
-
-
-def _status_input(status: _TextValues) -> list[str]:
-    if status is None:
-        return ["available", "negotiations"]
-    return _as_list(status) or []
-
-
-def _sort_params(sort: str | None) -> JsonDict:
-    if not sort:
-        return {"field": None, "order": None}
-    if sort not in SORT_OPTIONS:
-        raise ValueError(f"invalid sort value: {sort!r}")
-    field, order = SORT_OPTIONS[sort]
-    return {"field": field, "order": order}
-
-
-def _radius_params(location: str, radius_km: int) -> JsonDict:
-    radius = min(VALID_RADII, key=lambda valid_radius: abs(valid_radius - radius_km))
-    return {
-        "index": "geo-wonen-alias-prod",
-        "id": location.lower().replace(" ", "-") + "-0",
-        "path": f"area_with_radius.{radius}",
-    }
-
-
-def _add_bounds(params: JsonDict, key: str, bounds: _Bounds) -> None:
-    if bounds:
-        params[key] = bounds.to_params()
+    @staticmethod
+    def _text_values(value: _TextValues) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return [value]
+        return list(value)

@@ -1,6 +1,7 @@
 """Public parser entry points used by the Funda client."""
 
 from funda._detail_parser import parse_listing
+from funda._autocomplete_parser import parse_location_suggestions
 from funda._enrichment_parser import (
     parse_broker_info,
     parse_broker_listings,
@@ -22,6 +23,7 @@ __all__ = [
     "parse_contact_info",
     "parse_listing",
     "parse_listing_summary",
+    "parse_location_suggestions",
     "parse_market_insights",
     "parse_price_history",
     "parse_search_results",

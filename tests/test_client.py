@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from funda import Funda, FundaRequestError, Listing
+from funda import Funda, FundaRequestError, Listing, LocationSuggestion
 
 
 class FakeResponse:
@@ -85,6 +85,29 @@ class FundaClientTests(unittest.TestCase):
         self.assertIsNone(json_data)
         self.assertIn("search_result_", payload)
 
+    def test_autocomplete_posts_json_payload_and_parses_results(self) -> None:
+        client = self.client(FakeResponse(200, {"hits": {"hits": []}}))
+        expected = [LocationSuggestion(id="amsterdam/wijk-slotermeer-west-0")]
+
+        with patch("funda.funda.parse_location_suggestions", return_value=expected):
+            results = client.autocomplete(
+                "amsterdam west",
+                size=5,
+                area_types=["city", "municipality", "neighborhood", "wijk"],
+            )
+
+        self.assertEqual(results, expected)
+        url, payload, json_data = client._transport.posts[0]
+        self.assertIn("geo-wonen-alias-prod/_search/template", url)
+        self.assertIsNone(payload)
+        self.assertEqual(json_data["id"], "searchbox_20250805")
+        self.assertEqual(json_data["params"]["value"], "amsterdam west")
+        self.assertEqual(json_data["params"]["size"], 5)
+        self.assertEqual(
+            json_data["params"]["area_types"],
+            ["city", "municipality", "neighborhood", "wijk"],
+        )
+
     def test_enrichment_methods_share_json_error_handling(self) -> None:
         client = self.client(
             FakeResponse(200, {"contactBlockDetails": [{"id": 24716, "displayName": "Broker"}]}),
@@ -104,6 +127,23 @@ class FundaClientTests(unittest.TestCase):
 
         self.assertEqual(client._resolve_global_id(listing), 7988952)
         self.assertEqual(client._resolve_global_id(7988952), 7988952)
+
+    def test_market_insights_slugs_city_and_neighbourhood(self) -> None:
+        client = self.client(
+            FakeResponse(
+                200,
+                {
+                    "city": "Den Haag",
+                    "neighbourhood": "Centrum Noord",
+                    "averageAskingPricePerM2": 5975,
+                },
+            )
+        )
+
+        insights = client.market_insights("Den Haag", "Centrum Noord")
+
+        self.assertEqual(insights["avg_asking_price_per_m2"], 5975)
+        self.assertIn("/den-haag/centrum-noord", client._transport.get_urls[0])
 
 
 if __name__ == "__main__":
