@@ -4,9 +4,17 @@
 [![Python versions](https://img.shields.io/pypi/pyversions/pyfunda)](https://pypi.org/project/pyfunda/)
 [![License](https://img.shields.io/pypi/l/pyfunda)](https://github.com/0xMH/pyfunda/blob/main/LICENSE)
 
-The only working real Python API for Funda ([funda.nl](https://www.funda.nl)) -- the Netherlands' largest real estate platform.
+**pyfunda** is a Python API wrapper for [Funda.nl](https://www.funda.nl), the Netherlands' largest Dutch real estate platform. It talks to Funda's reverse engineered mobile JSON API, so you get clean typed objects for listings, prices, media, brokers, and price history without HTML scraping, Selenium, a headless browser, or CAPTCHA solving.
 
-> If you find this useful, consider giving it a star -- it helps others discover the project.
+Funda has no public developer API. pyfunda is the only working opensource Python client that hits Funda's app facing `*.funda.io` endpoints directly, the same ones the official Android app uses.
+
+```bash
+pip install pyfunda
+```
+
+Use pyfunda as a Funda API client or Funda Python SDK to fetch Dutch property listings, run search queries by city and price, pull listing detail and media, get broker info and reviews, read price history, and stream new listings. If you have been looking for a working fundascraper alternative or a Netherlands housing API, this is the only Python wrapper hitting the same `*.funda.io` endpoints the Funda Android app uses.
+
+> If you find this useful, consider giving it a star, it helps others discover the project.
 
 [![Star History Chart](https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date)](https://star-history.com/#0xMH/pyfunda&Date)
 

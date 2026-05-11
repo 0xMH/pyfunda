@@ -4,15 +4,34 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyfunda"
-version = "3.1.0"
-description = "Python API for Funda.nl real estate listings"
+version = "3.1.1"
+description = "Python API wrapper for Funda.nl, the Dutch real estate platform. Reverse-engineered mobile API client, no scraping, no Selenium, no CAPTCHA."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
     { name = "0xMH" }
 ]
-keywords = ["funda", "real-estate", "netherlands", "housing", "api", "scraper"]
+keywords = [
+    "funda",
+    "funda-api",
+    "funda-nl",
+    "funda-scraper",
+    "real-estate",
+    "real-estate-api",
+    "netherlands",
+    "dutch",
+    "housing",
+    "housing-api",
+    "api",
+    "api-wrapper",
+    "rest-api",
+    "client",
+    "sdk",
+    "mobile-api",
+    "reverse-engineering",
+    "scraper",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
