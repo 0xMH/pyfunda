@@ -63,7 +63,9 @@ class Funda:
 
     timeout: int = 30
     max_retries: int = DEFAULT_MAX_RETRIES
-    retry_backoff: float = 0.1
+    retry_backoff: float = 0.5
+    min_request_interval: float = 0.0
+    adaptive_throttle: bool = True
 
     _transport: _FundaTransport = field(init=False, repr=False)
     _parallel_runner: _ParallelRunner["Funda"] | None = field(default=None, init=False, repr=False)
@@ -73,6 +75,8 @@ class Funda:
             timeout=self.timeout,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
+            min_request_interval=self.min_request_interval,
+            adaptive_throttle=self.adaptive_throttle,
         )
 
     def close(self) -> None:
@@ -423,7 +427,9 @@ class Funda:
         for attempt in range(3):
             response = self._transport.post(API_SEARCH, profile="search", data=payload)
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                self._raise_for_msearch_error(data)
+                return data
             if response.status_code == 400 and attempt < 2:
                 time.sleep(0.1 * (attempt + 1))
                 continue
@@ -433,6 +439,23 @@ class Funda:
             raise SearchError(f"Search failed (status {response.status_code}){suffix}")
 
         raise SearchError("Search failed without a response")
+
+    @staticmethod
+    def _raise_for_msearch_error(data: JsonDict) -> None:
+        """Surface per-query errors that _msearch reports inside an HTTP 200 body.
+
+        The _msearch/template endpoint answers with HTTP 200 even when the
+        individual query fails (for example a rotated/stale search template),
+        embedding the failure as ``responses[].error``. Without this check such
+        breakage is silently parsed as zero results.
+        """
+        responses = data.get("responses") if isinstance(data, dict) else None
+        for entry in responses or []:
+            if isinstance(entry, dict) and entry.get("error"):
+                error = entry["error"]
+                reason = error.get("reason") if isinstance(error, dict) else str(error)
+                status = entry.get("status", "unknown")
+                raise SearchError(f"Search failed (status {status}): {reason}")
 
     def _autocomplete(self, autocomplete: LocationAutocomplete) -> JsonDict:
         payload = autocomplete.to_payload()
@@ -484,6 +507,8 @@ class Funda:
             timeout=self.timeout,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
+            min_request_interval=self.min_request_interval,
+            adaptive_throttle=self.adaptive_throttle,
         )
 
     def _listing_id_from_input(self, listing_id: int | str) -> str:

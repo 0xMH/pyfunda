@@ -19,7 +19,7 @@ def make_headers(profile: RequestProfile = "listing") -> HeaderList:
     tid = hex(int(time.time()))[2:] + "00000000"
 
     headers = [
-        ("user-agent", "Dart/3.9 (dart:io)"),
+        ("user-agent", "Dart/3.11 (dart:io)"),
         ("x-datadog-sampling-priority", "0"),
         ("x-datadog-origin", "rum"),
         ("tracestate", f"dd=s:0;o:rum;p:{parent_id}"),
@@ -39,6 +39,7 @@ def make_headers(profile: RequestProfile = "listing") -> HeaderList:
         headers.extend(
             [
                 ("x-funda-app-platform", "android"),
+                ("x-funda-app-version", "7.14.11"),
                 ("content-type", "application/json"),
             ]
         )
