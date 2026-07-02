@@ -63,9 +63,7 @@ class Funda:
 
     timeout: int = 30
     max_retries: int = DEFAULT_MAX_RETRIES
-    retry_backoff: float = 0.5
-    min_request_interval: float = 0.0
-    adaptive_throttle: bool = True
+    retry_backoff: float = 0.1
 
     _transport: _FundaTransport = field(init=False, repr=False)
     _parallel_runner: _ParallelRunner["Funda"] | None = field(default=None, init=False, repr=False)
@@ -75,8 +73,6 @@ class Funda:
             timeout=self.timeout,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
-            min_request_interval=self.min_request_interval,
-            adaptive_throttle=self.adaptive_throttle,
         )
 
     def close(self) -> None:
@@ -507,8 +503,6 @@ class Funda:
             timeout=self.timeout,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
-            min_request_interval=self.min_request_interval,
-            adaptive_throttle=self.adaptive_throttle,
         )
 
     def _listing_id_from_input(self, listing_id: int | str) -> str:
