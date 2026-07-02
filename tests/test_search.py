@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from funda.constants import SEARCH_INDEX, SEARCH_TEMPLATE_ID
 from funda.search import _Search
 
 
@@ -65,8 +66,8 @@ class SearchTests(unittest.TestCase):
         lines = payload.splitlines()
 
         self.assertEqual(len(lines), 2)
-        self.assertIn("listings-wonen-searcher", json.loads(lines[0])["index"])
-        self.assertIn("search_result_", json.loads(lines[1])["id"])
+        self.assertEqual(json.loads(lines[0])["index"], SEARCH_INDEX)
+        self.assertEqual(json.loads(lines[1])["id"], SEARCH_TEMPLATE_ID)
 
 
 if __name__ == "__main__":

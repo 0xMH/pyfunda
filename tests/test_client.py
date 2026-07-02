@@ -2,6 +2,8 @@ import unittest
 from unittest.mock import patch
 
 from funda import Funda, FundaRequestError, Listing, LocationSuggestion
+from funda.constants import LOCATION_AUTOCOMPLETE_TEMPLATE_ID, SEARCH_TEMPLATE_ID
+from funda.exceptions import SearchError
 
 
 class FakeResponse:
@@ -83,7 +85,27 @@ class FundaClientTests(unittest.TestCase):
         url, payload, json_data = client._transport.posts[0]
         self.assertIn("_msearch/template", url)
         self.assertIsNone(json_data)
-        self.assertIn("search_result_", payload)
+        self.assertIn(SEARCH_TEMPLATE_ID, payload)
+
+    def test_search_raises_on_embedded_msearch_error(self) -> None:
+        # _msearch/template answers 200 even when the query fails (e.g. a
+        # stale search template), embedding the error inside the body. This
+        # must surface as an error rather than being parsed as zero results.
+        error_body = {
+            "responses": [
+                {
+                    "error": {
+                        "reason": "No mapping found for [placement_type] in order to sort on",
+                    },
+                    "status": 400,
+                }
+            ]
+        }
+        client = self.client(FakeResponse(200, error_body))
+
+        with self.assertRaises(SearchError) as ctx:
+            client.search("amsterdam")
+        self.assertIn("placement_type", str(ctx.exception))
 
     def test_autocomplete_posts_json_payload_and_parses_results(self) -> None:
         client = self.client(FakeResponse(200, {"hits": {"hits": []}}))
@@ -100,7 +122,7 @@ class FundaClientTests(unittest.TestCase):
         url, payload, json_data = client._transport.posts[0]
         self.assertIn("geo-wonen-alias-prod/_search/template", url)
         self.assertIsNone(payload)
-        self.assertEqual(json_data["id"], "searchbox_20250805")
+        self.assertEqual(json_data["id"], LOCATION_AUTOCOMPLETE_TEMPLATE_ID)
         self.assertEqual(json_data["params"]["value"], "amsterdam west")
         self.assertEqual(json_data["params"]["size"], 5)
         self.assertEqual(

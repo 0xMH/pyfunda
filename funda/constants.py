@@ -36,7 +36,7 @@ API_BROKER_REVIEWS = (
 )
 
 SEARCH_INDEX = "listings-wonen-searcher-alias-prod"
-SEARCH_TEMPLATE_ID = "search_result_20250805"
+SEARCH_TEMPLATE_ID = "search_result_20260227"
 LOCATION_AUTOCOMPLETE_TEMPLATE_ID = "searchbox_20250805"
 LOCATION_AUTOCOMPLETE_AREA_TYPES = (
     "country",
