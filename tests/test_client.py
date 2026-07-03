@@ -78,10 +78,14 @@ class FundaClientTests(unittest.TestCase):
         client = self.client(FakeResponse(200, {"responses": []}))
         expected = [Listing(global_id=1)]
 
-        with patch("funda.funda.parse_search_results", return_value=expected):
+        with patch("funda.funda.parse_search_results", return_value=expected) as parse:
             results = client.search("amsterdam", max_price=500000)
 
         self.assertEqual(results, expected)
+        parse.assert_called_once_with(
+            {"responses": []},
+            preferred_offering_type="buy",
+        )
         url, payload, json_data = client._transport.posts[0]
         self.assertIn("_msearch/template", url)
         self.assertIsNone(json_data)
