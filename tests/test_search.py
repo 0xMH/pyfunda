@@ -2,6 +2,7 @@ import json
 import unittest
 
 from funda.constants import SEARCH_INDEX, SEARCH_TEMPLATE_ID
+from funda._search_parser import parse_search_results
 from funda.search import _Search
 
 
@@ -68,6 +69,51 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(lines), 2)
         self.assertEqual(json.loads(lines[0])["index"], SEARCH_INDEX)
         self.assertEqual(json.loads(lines[1])["id"], SEARCH_TEMPLATE_ID)
+
+    def test_rent_parser_prefers_rent_price_for_buy_rent_listings(self) -> None:
+        results = parse_search_results(
+            {
+                "responses": [
+                    {
+                        "hits": {
+                            "hits": [
+                                {
+                                    "_id": "8070001",
+                                    "_source": {
+                                        "id": "8070001",
+                                        "object_detail_page_relative_url": "/detail/koophuur/amsterdam/appartement-werfkade-129/43347854/",
+                                        "offering_type": ["buy", "rent"],
+                                        "address": {
+                                            "street_name": "Werfkade",
+                                            "house_number": 129,
+                                            "city": "Amsterdam",
+                                        },
+                                        "price": {
+                                            "selling_price": [400000],
+                                            "selling_price_range": {"gte": 400000, "lte": 400000},
+                                            "selling_price_condition": "kosten_koper",
+                                            "selling_price_type": "regular",
+                                            "rent_price": [2250],
+                                            "rent_price_range": {"gte": 2250, "lte": 2250},
+                                            "rent_price_condition": "per_month",
+                                            "rent_price_type": "regular",
+                                        },
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            preferred_offering_type="rent",
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].offering_type, "rent")
+        self.assertEqual(results[0].price.amount, 2250)
+        self.assertEqual(results[0].price.condition, "per_month")
+        self.assertEqual(results[0].price.range_min, 2250)
+        self.assertEqual(results[0].price.range_max, 2250)
 
 
 if __name__ == "__main__":

@@ -33,21 +33,33 @@ from funda.listing import (
 )
 
 
-def parse_search_results(data: Mapping[str, Any]) -> list[Listing]:
+def parse_search_results(
+    data: Mapping[str, Any],
+    *,
+    preferred_offering_type: str | None = None,
+) -> list[Listing]:
     responses = data.get("responses") or []
     if not responses:
         return []
     hits = mapping(mapping(responses[0]).get("hits")).get("hits") or []
-    return [_hit(hit) for hit in hits if isinstance(hit, Mapping)]
+    return [
+        _hit(hit, preferred_offering_type=preferred_offering_type)
+        for hit in hits
+        if isinstance(hit, Mapping)
+    ]
 
 
-def _hit(hit: Mapping[str, Any]) -> Listing:
+def _hit(
+    hit: Mapping[str, Any],
+    *,
+    preferred_offering_type: str | None = None,
+) -> Listing:
     source = mapping(hit.get("_source"))
     address_data = mapping(source.get("address"))
     global_id = parse_int(coalesce(hit.get("_id"), source.get("id")))
     path = source.get("object_detail_page_relative_url")
     tiny_id = tiny_id_from_url(path)
-    offering_type = normalize_offering_type(first(source.get("offering_type")))
+    offering_type = _offering_type(source.get("offering_type"), preferred_offering_type)
 
     return Listing(
         listing_id=tiny_id or as_str(global_id),
@@ -88,6 +100,14 @@ def _address(address: Mapping[str, Any]) -> Address:
     )
 
 
+def _offering_type(value: Any, preferred: str | None = None) -> str | None:
+    values = value if isinstance(value, list) else [value]
+    normalized = [normalize_offering_type(item) for item in values]
+    if preferred in normalized:
+        return preferred
+    return next((item for item in normalized if item), None)
+
+
 def _price(source: Mapping[str, Any], offering_type: str | None) -> Price:
     price = mapping(source.get("price"))
     sale_amount = first(price.get("selling_price"))
@@ -95,11 +115,21 @@ def _price(source: Mapping[str, Any], offering_type: str | None) -> Price:
     sale_range = mapping(price.get("selling_price_range"))
     rent_range = mapping(price.get("rent_price_range"))
     range_data = sale_range or rent_range
+    if offering_type == "rent":
+        amount = coalesce(rent_amount, sale_amount)
+        condition = price.get("rent_price_condition") or price.get("selling_price_condition")
+        price_type = price.get("rent_price_type") or price.get("selling_price_type")
+        range_data = rent_range or sale_range
+    else:
+        amount = coalesce(sale_amount, rent_amount)
+        condition = price.get("selling_price_condition") or price.get("rent_price_condition")
+        price_type = price.get("selling_price_type") or price.get("rent_price_type")
+        range_data = sale_range or rent_range
     return Price(
-        amount=parse_int(coalesce(sale_amount, rent_amount)),
+        amount=parse_int(amount),
         offering_type=offering_type,
-        condition=price.get("selling_price_condition") or price.get("rent_price_condition"),
-        price_type=price.get("selling_price_type") or price.get("rent_price_type"),
+        condition=condition,
+        price_type=price_type,
         range_min=parse_int(range_data.get("gte")),
         range_max=parse_int(range_data.get("lte")),
         raw=dict(price),

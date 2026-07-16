@@ -478,7 +478,10 @@ class Funda:
         raise SearchError("Location autocomplete failed without a response")
 
     def _search_results(self, search: _Search) -> list[Listing]:
-        return parse_search_results(self._search(search))
+        return parse_search_results(
+            self._search(search),
+            preferred_offering_type=search.offering,
+        )
 
     def _parallel(
         self,
