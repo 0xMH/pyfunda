@@ -7,10 +7,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, TypeVar
 from urllib.parse import quote, urlencode
 
+from curl_cffi import requests as curl_requests
+
+from funda._autocomplete import LocationAutocomplete
+from funda._nuxt import NuxtPayloadError, extract_search_state
 from funda._parallel import _ParallelRunner
 from funda._transport import _FundaTransport
 from funda.constants import (
-    API_LOCATION_AUTOCOMPLETE,
     API_BROKER_INFO,
     API_BROKER_LISTINGS,
     API_BROKER_REVIEWS,
@@ -19,6 +22,7 @@ from funda.constants import (
     API_LISTING,
     API_LISTING_SUMMARY,
     API_LISTING_TINY,
+    API_LOCATION_AUTOCOMPLETE,
     API_MARKET_INSIGHTS,
     API_SEARCH,
     API_SIMILAR,
@@ -26,9 +30,15 @@ from funda.constants import (
     DEFAULT_MAX_RETRIES,
     LOCATION_AUTOCOMPLETE_AREA_TYPES,
     PAGE_SIZE,
+    VALID_RADII,
+    WEB_SEARCH_BASE,
 )
-from funda.exceptions import FundaRequestError, ListingNotFound, PriceHistoryError, SearchError
-from funda._autocomplete import LocationAutocomplete
+from funda.exceptions import (
+    FundaRequestError,
+    ListingNotFound,
+    PriceHistoryError,
+    SearchError,
+)
 from funda.listing import Listing, LocationSuggestion, PriceHistory
 from funda.models import JsonDict
 from funda.parsing import (
@@ -44,9 +54,9 @@ from funda.parsing import (
     parse_price_history,
     parse_search_results,
     parse_similar_listings,
+    parse_web_search_results,
 )
 from funda.search import _Search
-
 
 _TextValues = str | Sequence[str] | None
 _ListingInput = Listing | int | str
@@ -68,6 +78,7 @@ class Funda:
 
     _transport: _FundaTransport = field(init=False, repr=False)
     _parallel_runner: _ParallelRunner["Funda"] | None = field(default=None, init=False, repr=False)
+    _web_session: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._transport = _FundaTransport(
@@ -77,11 +88,33 @@ class Funda:
             min_request_interval=self.min_request_interval,
         )
 
+    @property
+    def web_session(self) -> Any:
+        """Lazily create a browser-impersonating session for web search."""
+        if self._web_session is None:
+            self._web_session = curl_requests.Session(impersonate="chrome124")
+            self._web_session.headers.update(
+                {
+                    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "accept-language": "nl-NL,nl;q=0.9,en;q=0.8",
+                }
+            )
+        return self._web_session
+
     def close(self) -> None:
-        if self._parallel_runner is not None:
-            self._parallel_runner.close()
-            self._parallel_runner = None
-        self._transport.close()
+        try:
+            if self._parallel_runner is not None:
+                try:
+                    self._parallel_runner.close()
+                finally:
+                    self._parallel_runner = None
+        finally:
+            try:
+                if self._web_session is not None:
+                    self._web_session.close()
+            finally:
+                self._web_session = None
+                self._transport.close()
 
     def __enter__(self) -> "Funda":
         return self
@@ -478,7 +511,112 @@ class Funda:
         raise SearchError("Location autocomplete failed without a response")
 
     def _search_results(self, search: _Search) -> list[Listing]:
-        return parse_search_results(self._search(search))
+        try:
+            return parse_search_results(self._search(search))
+        except SearchError as exc:
+            if "status 401" not in str(exc):
+                raise
+            return self._search_web(search)
+
+    def _search_web(self, search: _Search) -> list[Listing]:
+        search.to_params()
+        locations = self._web_locations(search.location)
+        params: dict[str, str | int] = {
+            "page": search.page + 1,
+            "availability": ",".join(search._availability_values()),
+        }
+        object_types = search._text_values(search.object_type) or ["house", "apartment"]
+        if object_types:
+            params["object_type"] = ",".join(object_types)
+        if locations:
+            params["selected_area"] = ",".join(locations)
+        if search.radius_km is not None:
+            params["radius_search"] = min(
+                VALID_RADII, key=lambda value: abs(value - search.radius_km)
+            )
+
+        sort_map = {
+            "newest": "date_down",
+            "oldest": "date_up",
+            "price_asc": "price_up",
+            "price_desc": "price_down",
+            "area_desc": "floor_area_down",
+            "plot_desc": "plot_area_down",
+            "city": "city_up",
+            "postcode": "postal_code_up",
+        }
+        if search.sort:
+            if search.sort == "area_asc":
+                raise ValueError("area_asc is not supported by Funda's current web search")
+            if search.sort not in sort_map:
+                raise ValueError(f"invalid sort value: {search.sort!r}")
+            params["sort"] = sort_map[search.sort]
+
+        energy_label = search._text_values(search.energy_label)
+        if energy_label:
+            params["energy_label"] = ",".join(energy_label)
+        construction_type = search._text_values(search.construction_type)
+        if construction_type:
+            params["construction_type"] = ",".join(construction_type)
+        periods = search.construction_year.to_period_keys()
+        if periods:
+            params["construction_period"] = ",".join(periods)
+
+        for name, bounds in (
+            ("price", search.price),
+            ("floor_area", search.area),
+            ("plot_area", search.plot),
+            ("rooms", search.rooms),
+            ("bedrooms", search.bedrooms),
+        ):
+            value = self._web_range(bounds)
+            if value is not None:
+                params[name] = value
+
+        offering_path = "huur" if search.category == "rent" else "koop"
+        response = self.web_session.get(
+            f"{WEB_SEARCH_BASE}/{offering_path}/",
+            params=params,
+            timeout=self.timeout,
+        )
+        if response.status_code != 200:
+            detail = getattr(response, "text", "")[:200]
+            suffix = f": {detail}" if detail else ""
+            raise SearchError(f"Search failed (status {response.status_code}){suffix}")
+        response_text = getattr(response, "text", "")
+        if "__akam_recaptcha_validate" in response_text or "Je bent bijna" in response_text:
+            raise SearchError("Search failed: Funda web search was blocked by bot protection")
+        try:
+            state = extract_search_state(response_text)
+        except NuxtPayloadError as exc:
+            raise SearchError(
+                f"Search failed: could not decode Funda web search: {exc}"
+            ) from exc
+
+        selected_areas = state.get("criteria", {}).get("selected_area", [])
+        if locations and len(selected_areas) != len(locations):
+            raise SearchError(f"Search failed: could not resolve location(s): {locations}")
+        return parse_web_search_results(state.get("listings", []), search.category)
+
+    @staticmethod
+    def _web_locations(location: _TextValues) -> list[str]:
+        values = _Search._text_values(location) or []
+        normalized = []
+        for value in values:
+            value = str(value).strip().lower()
+            if re.fullmatch(r"\d{4}\s*[a-z]{2}", value):
+                normalized.append(re.sub(r"\s+", "", value))
+            else:
+                normalized.append(re.sub(r"[\s_]+", "-", value))
+        return normalized
+
+    @staticmethod
+    def _web_range(bounds: Any) -> str | None:
+        if not bounds:
+            return None
+        lower = "" if bounds.minimum is None else str(bounds.minimum)
+        upper = "" if bounds.maximum is None else str(bounds.maximum)
+        return f"{lower}-{upper}"
 
     def _parallel(
         self,

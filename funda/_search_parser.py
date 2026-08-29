@@ -41,6 +41,28 @@ def parse_search_results(data: Mapping[str, Any]) -> list[Listing]:
     return [_hit(hit) for hit in hits if isinstance(hit, Mapping)]
 
 
+def parse_web_search_results(
+    items: list[Mapping[str, Any]], offering_type: str
+) -> list[Listing]:
+    """Parse listing objects embedded in Funda's web search page."""
+    parsed: list[Listing] = []
+    for item in items:
+        source = dict(item)
+        source["offering_type"] = [
+            "rent" if offering_type == "rent" else "buy"
+        ]
+        if "thumbnail_id" not in source:
+            source["thumbnail_id"] = source.get("photo_image_id") or []
+        if "blikvanger" not in source and source.get("promo_text"):
+            source["blikvanger"] = {"text": source["promo_text"]}
+        if "plot_area" not in source:
+            plot_range = mapping(source.get("plot_area_range"))
+            if plot_range.get("gte") is not None:
+                source["plot_area"] = [plot_range["gte"]]
+        parsed.append(_hit({"_id": source.get("id"), "_source": source}))
+    return parsed
+
+
 def _hit(hit: Mapping[str, Any]) -> Listing:
     source = mapping(hit.get("_source"))
     address_data = mapping(source.get("address"))

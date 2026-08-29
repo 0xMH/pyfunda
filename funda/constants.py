@@ -7,6 +7,7 @@ API_BASE = "https://listing-detail-page.funda.io/api/v4/listing/object/nl"
 API_LISTING = f"{API_BASE}/{{listing_id}}"
 API_LISTING_TINY = f"{API_BASE}/tinyId/{{tiny_id}}"
 API_SEARCH = "https://listing-search-wonen.funda.io/_msearch/template"
+WEB_SEARCH_BASE = "https://www.funda.nl/zoeken"
 API_LOCATION_AUTOCOMPLETE = (
     "https://listing-search-wonen.funda.io/geo-wonen-alias-prod/_search/template"
 )

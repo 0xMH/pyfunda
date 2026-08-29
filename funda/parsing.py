@@ -13,7 +13,7 @@ from funda._enrichment_parser import (
     parse_similar_listings,
 )
 from funda._price_history_parser import parse_price_history
-from funda._search_parser import parse_search_results
+from funda._search_parser import parse_search_results, parse_web_search_results
 
 __all__ = [
     "parse_broker_info",
@@ -28,4 +28,5 @@ __all__ = [
     "parse_price_history",
     "parse_search_results",
     "parse_similar_listings",
+    "parse_web_search_results",
 ]

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pyfunda"
-version = "3.1.4"
+version = "3.1.5"
 description = "Python API wrapper for Funda.nl, the Dutch real estate platform. Reverse-engineered mobile API client, no scraping, no Selenium, no CAPTCHA."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
