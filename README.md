@@ -12,8 +12,6 @@ Use pyfunda as a Funda API client or Funda Python SDK to fetch Dutch property li
 
 > If you find this useful, consider giving it a star, it helps others discover the project.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=0xMH/pyfunda&type=Date)](https://star-history.com/#0xMH/pyfunda&Date)
-
 ## Why I'm open-sourcing this?
 
 After pyfunda, I got messages asking why I'd give this away when aggregators will just take it and sell it. They're right, every week there's a new "revolutionary AI-powered housing finder" charging EUR40/month or a EUR250 "success fee." They all pull from the same one or two sources and wrap it in a fancy UI completely built with AI.
